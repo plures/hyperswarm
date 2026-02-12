@@ -169,6 +169,59 @@ impl DhtClient {
         Ok(response.r.and_then(|r| r.id).unwrap_or_default())
     }
 
+    /// Send a find_node query to locate nodes near a target
+    #[allow(dead_code)]
+    async fn find_node(&self, addr: SocketAddr, target: &[u8; 20]) -> Result<Vec<NodeInfo>, DhtError> {
+        let tx_id = self.get_transaction_id().await;
+        
+        let msg = protocol::KrpcMessage {
+            t: tx_id.clone(),
+            y: protocol::KrpcMessageType::Query,
+            q: Some(protocol::KrpcQueryKind::FindNode),
+            a: Some(protocol::KrpcArgs {
+                id: Some(self.node_id.to_vec()),
+                target: Some(target.to_vec()),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+        
+        self.send_krpc(addr, msg).await?;
+        
+        // Wait for response with timeout
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.recv_response(&tx_id)
+        )
+        .await
+        .map_err(|_| DhtError::Timeout)??;
+        
+        // Parse compact node info from response
+        let mut nodes = Vec::new();
+        if let Some(r) = response.r {
+            if let Some(nodes_data) = r.nodes {
+                // Each node is 26 bytes: 20-byte ID + 4-byte IP + 2-byte port
+                for chunk in nodes_data.chunks(26) {
+                    if chunk.len() == 26 {
+                        let mut node_id = [0u8; 20];
+                        node_id.copy_from_slice(&chunk[0..20]);
+                        
+                        let ip = std::net::Ipv4Addr::new(
+                            chunk[20], chunk[21], chunk[22], chunk[23]
+                        );
+                        let port = u16::from_be_bytes([chunk[24], chunk[25]]);
+                        let addr = SocketAddr::new(std::net::IpAddr::V4(ip), port);
+                        
+                        nodes.push(NodeInfo { node_id, addr });
+                    }
+                }
+            }
+        }
+        
+        Ok(nodes)
+    }
+
     /// Announce our presence for `topic`.
     ///
     /// In KRPC terms this often maps to `announce_peer` / topic announce.
