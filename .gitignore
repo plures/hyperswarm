@@ -5,3 +5,7 @@ sandbox
 .nyc_output
 coverage
 *.0x
+
+# Rust build artifacts
+crates/hyperswarm-rs/target/
+crates/hyperswarm-rs/Cargo.lock

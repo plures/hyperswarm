@@ -4,6 +4,7 @@
 //! This module defines message types and (de)serialization helpers.
 
 use serde::{Deserialize, Serialize};
+use serde_bencode::{de, ser};
 
 /// KRPC message envelope.
 ///
@@ -79,14 +80,76 @@ pub struct KrpcResponse {
 pub enum ProtocolError {
     #[error("not implemented")]
     Unimplemented,
+    #[error("bencode encode error: {0}")]
+    BencodeEncode(String),
+    #[error("bencode decode error: {0}")]
+    BencodeDecode(String),
 }
 
-pub fn encode_krpc(_msg: &KrpcMessage) -> Result<Vec<u8>, ProtocolError> {
-    // TODO: implement bencode encoding.
-    Err(ProtocolError::Unimplemented)
+pub fn encode_krpc(msg: &KrpcMessage) -> Result<Vec<u8>, ProtocolError> {
+    ser::to_bytes(msg).map_err(|e| ProtocolError::BencodeEncode(e.to_string()))
 }
 
-pub fn decode_krpc(_data: &[u8]) -> Result<KrpcMessage, ProtocolError> {
-    // TODO: implement bencode decoding.
-    Err(ProtocolError::Unimplemented)
+pub fn decode_krpc(data: &[u8]) -> Result<KrpcMessage, ProtocolError> {
+    de::from_bytes(data).map_err(|e| ProtocolError::BencodeDecode(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_krpc_ping_encode_decode() {
+        let msg = KrpcMessage {
+            t: vec![1, 2],
+            y: KrpcMessageType::Query,
+            q: Some(KrpcQueryKind::Ping),
+            a: Some(KrpcArgs {
+                id: Some(vec![0; 20]),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+
+        // Encode
+        let encoded = encode_krpc(&msg).expect("Failed to encode");
+        assert!(!encoded.is_empty());
+
+        // Decode
+        let decoded = decode_krpc(&encoded).expect("Failed to decode");
+        assert_eq!(decoded.t, msg.t);
+        match decoded.y {
+            KrpcMessageType::Query => {},
+            _ => panic!("Expected Query type"),
+        }
+        assert!(decoded.q.is_some());
+    }
+
+    #[test]
+    fn test_krpc_response_encode_decode() {
+        let msg = KrpcMessage {
+            t: vec![3, 4],
+            y: KrpcMessageType::Response,
+            q: None,
+            a: None,
+            r: Some(KrpcResponse {
+                id: Some(vec![1; 20]),
+                ..Default::default()
+            }),
+            e: None,
+        };
+
+        // Encode
+        let encoded = encode_krpc(&msg).expect("Failed to encode");
+        
+        // Decode
+        let decoded = decode_krpc(&encoded).expect("Failed to decode");
+        assert_eq!(decoded.t, msg.t);
+        match decoded.y {
+            KrpcMessageType::Response => {},
+            _ => panic!("Expected Response type"),
+        }
+        assert!(decoded.r.is_some());
+    }
 }
