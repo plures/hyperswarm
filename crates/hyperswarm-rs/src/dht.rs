@@ -122,14 +122,18 @@ impl DhtClient {
         
         for node_addr in bootstrap_nodes {
             // Try to resolve and ping each bootstrap node
-            if let Ok(addr) = tokio::net::lookup_host(node_addr).await?.next().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("No address found for {}", node_addr)
-                )
-            }) {
-                // Send ping to bootstrap node
-                let _ = self.ping(addr).await;
+            match tokio::net::lookup_host(node_addr).await {
+                Ok(mut addrs) => {
+                    if let Some(addr) = addrs.next() {
+                        // Send ping to bootstrap node
+                        let _ = self.ping(addr).await;
+                    }
+                }
+                Err(_) => {
+                    // Silently skip nodes that can't be resolved
+                    // In a production implementation, this should be logged
+                    continue;
+                }
             }
         }
         
