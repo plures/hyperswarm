@@ -58,6 +58,11 @@ struct RoutingTable {
     nodes: Vec<NodeInfo>,
 }
 
+// Constants for routing table and protocol
+const MAX_ROUTING_TABLE_SIZE: usize = 100; // Simplified limit; full impl would use k-buckets
+const MAX_KRPC_MESSAGE_SIZE: usize = 2048; // Typical UDP DHT message size
+const MAX_RESPONSE_ATTEMPTS: usize = 10; // Retries for matching transaction ID
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct NodeInfo {
@@ -76,7 +81,7 @@ impl RoutingTable {
         self.nodes.push(NodeInfo { node_id, addr });
         
         // Keep the table size limited
-        if self.nodes.len() > 100 {
+        if self.nodes.len() > MAX_ROUTING_TABLE_SIZE {
             self.nodes.remove(0);
         }
     }
@@ -118,7 +123,10 @@ impl DhtClient {
         for node_addr in bootstrap_nodes {
             // Try to resolve and ping each bootstrap node
             if let Ok(addr) = tokio::net::lookup_host(node_addr).await?.next().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "No address found")
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("No address found for {}", node_addr)
+                )
             }) {
                 // Send ping to bootstrap node
                 let _ = self.ping(addr).await;
@@ -263,7 +271,7 @@ impl DhtClient {
     }
 
     async fn recv_krpc(&self) -> Result<(SocketAddr, protocol::KrpcMessage), DhtError> {
-        let mut buf = vec![0u8; 2048];
+        let mut buf = vec![0u8; MAX_KRPC_MESSAGE_SIZE];
         let (len, addr) = self.socket.recv_from(&mut buf).await?;
         buf.truncate(len);
         let msg = protocol::decode_krpc(&buf)?;
@@ -273,7 +281,7 @@ impl DhtClient {
     async fn recv_response(&self, tx_id: &[u8]) -> Result<protocol::KrpcMessage, DhtError> {
         // Simple implementation: receive messages until we find matching transaction ID
         // In a full implementation, this would use a proper request/response matcher
-        for _ in 0..10 {
+        for _ in 0..MAX_RESPONSE_ATTEMPTS {
             let (_, msg) = self.recv_krpc().await?;
             if msg.t == tx_id {
                 return Ok(msg);
