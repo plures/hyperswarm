@@ -97,10 +97,28 @@ impl HolepunchSession {
 
     /// Send probe packets to candidates.
     pub async fn probe(&mut self, candidates: &[Candidate]) -> Result<(), HolepunchError> {
+        let mut success_count = 0usize;
+        let mut last_error: Option<std::io::Error> = None;
+
         for candidate in candidates {
             // Send probe message to create NAT binding
-            if let Err(e) = self.socket.send_to(PROBE_MESSAGE, candidate.addr).await {
-                tracing::debug!("Probe attempt unsuccessful for candidate {}: {}", candidate.addr, e);
+            match self.socket.send_to(PROBE_MESSAGE, candidate.addr).await {
+                Ok(_) => {
+                    success_count += 1;
+                }
+                Err(e) => {
+                    tracing::debug!("Probe attempt unsuccessful for candidate {}: {}", candidate.addr, e);
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        if success_count == 0 {
+            if let Some(e) = last_error {
+                return Err(HolepunchError::Io(e));
+            } else {
+                // Defensive fallback: no successful probes and no captured error.
+                return Err(HolepunchError::NoViableCandidates);
             }
         }
         Ok(())
