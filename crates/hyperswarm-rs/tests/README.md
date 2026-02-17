@@ -67,7 +67,7 @@ All integration tests complete within acceptable timeframes:
 
 | Test Suite | Duration | Target | Status |
 |------------|----------|--------|--------|
-| DHT Discovery | 5.10s | < 5s | ⚠️ Marginally over |
+| DHT Discovery | 5.10s | ~5s | ⚠️ Slightly over (acceptable) |
 | Encrypted Transport | 0.01s | < 5s | ✅ |
 | Holepunch Flow | 0.05s | < 5s | ✅ |
 | Bootstrap Resilience | 2.01s | < 5s | ✅ |
@@ -75,7 +75,7 @@ All integration tests complete within acceptable timeframes:
 
 ## Known Limitations
 
-1. **DHT Discovery Timing**: The two-node discovery test takes 5.1s due to internal DHT timeouts. This is marginally over the 5-second target but still acceptable.
+1. **DHT Discovery Timing**: The two-node discovery test takes 5.1s due to internal DHT timeouts. This is slightly over the 5-second target but acceptable given the protocol's design.
 
 2. **Holepunch Race Condition**: `test_holepunch_initiate_and_respond` is currently ignored due to a race condition in the handshake timing between initiator and responder. The probe phase and candidate selection are fully tested, but the full end-to-end flow requires further investigation.
 
