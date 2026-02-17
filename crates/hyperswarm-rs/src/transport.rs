@@ -191,7 +191,14 @@ impl EncryptedStream {
         match &mut *state {
             StreamState::Established(transport) => {
                 let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
-                let (len, _) = self.socket.recv_from(&mut buf).await?;
+                // Only accept packets from the expected remote_addr
+                let len = loop {
+                    let (len, addr) = self.socket.recv_from(&mut buf).await?;
+                    if addr == self.remote_addr {
+                        break len;
+                    }
+                    // Ignore packets from unexpected peers and wait for the correct one
+                };
                 
                 let mut plaintext = vec![0u8; MAX_MESSAGE_SIZE];
                 let plaintext_len = transport
