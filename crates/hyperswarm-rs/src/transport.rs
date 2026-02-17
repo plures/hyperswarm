@@ -123,19 +123,19 @@ impl EncryptedStream {
         let builder = Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?
         );
-        
-        let keypair = builder.generate_keypair()
+
+        let keypair = builder
+            .generate_keypair()
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
-        
-        // Create responder handshake state with keys
-        let mut handshake = Builder::new(
-            NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?
-        )
-        .local_private_key(&keypair.private)
-        .build_responder()
-        .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
+
+        // Create responder handshake state with keys, reusing the same builder
+        let mut handshake = builder
+            .local_private_key(&keypair.private)
+            .build_responder()
+            .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
 
         // <- e
+        let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
         let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
         let (recv_len, _) = self.socket.recv_from(&mut buf).await?;
         let _ = handshake
