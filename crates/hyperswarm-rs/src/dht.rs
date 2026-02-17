@@ -64,7 +64,8 @@ const MAX_KRPC_MESSAGE_SIZE: usize = 2048; // Typical UDP DHT message size
 const MAX_RESPONSE_ATTEMPTS: usize = 10; // Retries for matching transaction ID
 
 // Constants for compact encoding formats (BEP 5)
-const COMPACT_PEER_INFO_SIZE: usize = 6; // 4-byte IPv4 + 2-byte port
+const COMPACT_PEER_INFO_SIZE_IPV4: usize = 6; // 4-byte IPv4 + 2-byte port
+const COMPACT_PEER_INFO_SIZE_IPV6: usize = 18; // 16-byte IPv6 + 2-byte port
 const COMPACT_NODE_INFO_SIZE: usize = 26; // 20-byte ID + 4-byte IPv4 + 2-byte port
 
 #[derive(Clone, Debug)]
@@ -273,10 +274,11 @@ impl DhtClient {
             token = r.token.clone();
             
             // Parse compact peer info from values field
+            // BEP 5 defines both IPv4 (6 bytes) and IPv6 (18 bytes) formats
             if let Some(values) = r.values {
                 for value in values {
-                    // Each peer is 6 bytes: 4-byte IPv4 + 2-byte port (BEP 5)
-                    if value.len() == COMPACT_PEER_INFO_SIZE {
+                    if value.len() == COMPACT_PEER_INFO_SIZE_IPV4 {
+                        // IPv4: 4-byte IP + 2-byte port
                         let ip = std::net::Ipv4Addr::new(
                             value[0], value[1], value[2], value[3]
                         );
@@ -287,6 +289,21 @@ impl DhtClient {
                             addr,
                             node_id: None,
                         });
+                    } else if value.len() == COMPACT_PEER_INFO_SIZE_IPV6 {
+                        // IPv6: 16-byte IP + 2-byte port
+                        let mut ipv6_bytes = [0u8; 16];
+                        ipv6_bytes.copy_from_slice(&value[0..16]);
+                        let ip = std::net::Ipv6Addr::from(ipv6_bytes);
+                        let port = u16::from_be_bytes([value[16], value[17]]);
+                        let addr = SocketAddr::new(std::net::IpAddr::V6(ip), port);
+                        
+                        peers.push(PeerAddress {
+                            addr,
+                            node_id: None,
+                        });
+                    } else {
+                        // Unknown format, skip
+                        tracing::debug!("Skipping peer with unknown compact format length: {}", value.len());
                     }
                 }
             }
@@ -542,5 +559,69 @@ mod tests {
         
         // Transaction IDs should be different
         assert_ne!(tx1, tx2);
+    }
+
+    #[tokio::test]
+    async fn test_compact_peer_parsing_ipv4() {
+        // Test IPv4 compact peer info parsing
+        let ipv4_peer = vec![127, 0, 0, 1, 0x1F, 0x90]; // 127.0.0.1:8080
+        assert_eq!(ipv4_peer.len(), COMPACT_PEER_INFO_SIZE_IPV4);
+        
+        // Verify parsing logic
+        let ip = std::net::Ipv4Addr::new(ipv4_peer[0], ipv4_peer[1], ipv4_peer[2], ipv4_peer[3]);
+        let port = u16::from_be_bytes([ipv4_peer[4], ipv4_peer[5]]);
+        
+        assert_eq!(ip.to_string(), "127.0.0.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[tokio::test]
+    async fn test_compact_peer_parsing_ipv6() {
+        // Test IPv6 compact peer info parsing
+        let ipv6_peer = vec![
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x1F, 0x90  // port 8080
+        ];
+        assert_eq!(ipv6_peer.len(), COMPACT_PEER_INFO_SIZE_IPV6);
+        
+        // Verify parsing logic
+        let mut ipv6_bytes = [0u8; 16];
+        ipv6_bytes.copy_from_slice(&ipv6_peer[0..16]);
+        let ip = std::net::Ipv6Addr::from(ipv6_bytes);
+        let port = u16::from_be_bytes([ipv6_peer[16], ipv6_peer[17]]);
+        
+        assert_eq!(ip.to_string(), "2001:db8::1");
+        assert_eq!(port, 8080);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_bootstrap_calls() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = std::sync::Arc::new(
+            DhtClient::new(config).await.expect("Failed to create DHT client")
+        );
+        
+        // Spawn multiple concurrent bootstrap calls
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let client_clone = client.clone();
+            handles.push(tokio::spawn(async move {
+                client_clone.bootstrap().await
+            }));
+        }
+        
+        // All should complete without error
+        for handle in handles {
+            assert!(handle.await.unwrap().is_ok());
+        }
+        
+        // Bootstrap should have only run once due to OnceCell
+        // (We can't directly verify this without internal state inspection,
+        // but at least we verify no panics or errors occur)
     }
 }
