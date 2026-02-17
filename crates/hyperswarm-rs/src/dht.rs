@@ -51,6 +51,7 @@ pub struct DhtClient {
     node_id: [u8; 20],
     routing_table: Arc<Mutex<RoutingTable>>,
     next_transaction_id: Arc<Mutex<u16>>,
+    bootstrap_nodes: Vec<String>,
 }
 
 /// Basic routing table for storing known nodes
@@ -113,30 +114,48 @@ impl DhtClient {
             node_id,
             routing_table: Arc::new(Mutex::new(RoutingTable::new())),
             next_transaction_id: Arc::new(Mutex::new(0)),
+            bootstrap_nodes: config.bootstrap,
         })
     }
 
     /// Join the DHT and populate the routing table from bootstrap nodes.
     pub async fn bootstrap(&self) -> Result<(), DhtError> {
-        // Default mainline DHT bootstrap nodes
-        let bootstrap_nodes = vec![
-            "router.bittorrent.com:6881",
-            "dht.transmissionbt.com:6881",
-            "router.utorrent.com:6881",
-        ];
+        // Use configured bootstrap nodes
+        let bootstrap_nodes = if self.bootstrap_nodes.is_empty() {
+            // If no bootstrap nodes configured, use mainline DHT defaults
+            vec![
+                "router.bittorrent.com:6881".to_string(),
+                "dht.transmissionbt.com:6881".to_string(),
+                "router.utorrent.com:6881".to_string(),
+            ]
+        } else {
+            self.bootstrap_nodes.clone()
+        };
         
         for node_addr in bootstrap_nodes {
             // Try to resolve and ping each bootstrap node
-            match tokio::net::lookup_host(node_addr).await {
-                Ok(mut addrs) => {
+            // Use a shorter timeout for DNS resolution
+            let timeout_result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                tokio::net::lookup_host(&node_addr)
+            ).await;
+            
+            match timeout_result {
+                Ok(Ok(mut addrs)) => {
                     if let Some(addr) = addrs.next() {
-                        // Send ping to bootstrap node
-                        let _ = self.ping(addr).await;
+                        // Send ping to bootstrap node with timeout
+                        // Use a shorter timeout (2 seconds instead of 5)
+                        let ping_timeout_result = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            self.ping(addr)
+                        ).await;
+                        
+                        // Silently ignore errors and timeouts
+                        let _ = ping_timeout_result;
                     }
                 }
-                Err(_) => {
-                    // Silently skip nodes that can't be resolved
-                    // In a production implementation, this should be logged
+                _ => {
+                    // Silently skip nodes that can't be resolved or timeout
                     continue;
                 }
             }
@@ -444,6 +463,22 @@ impl DhtClient {
     pub async fn shutdown(&self) -> Result<(), DhtError> {
         // TODO: stop background tasks.
         Ok(())
+    }
+
+    /// Get the local socket address
+    pub fn local_addr(&self) -> Result<SocketAddr, DhtError> {
+        Ok(self.socket.local_addr()?)
+    }
+
+    /// Get this node's ID (for testing)
+    pub fn node_id(&self) -> [u8; 20] {
+        self.node_id
+    }
+
+    /// Manually add a node to the routing table (for testing)
+    pub async fn add_node_to_routing_table(&self, node_id: [u8; 20], addr: SocketAddr) {
+        let mut rt = self.routing_table.lock().await;
+        rt.add_node(node_id, addr);
     }
 
     // ---- low-level helpers ----
