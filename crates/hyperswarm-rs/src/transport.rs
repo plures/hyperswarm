@@ -54,7 +54,7 @@ impl EncryptedStream {
         // Generate static keypair for this session
         let builder = Builder::new(NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?);
         
-        // Generate a keypair
+        // Generate a keypair and build initiator with it
         let keypair = builder.generate_keypair()
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
         

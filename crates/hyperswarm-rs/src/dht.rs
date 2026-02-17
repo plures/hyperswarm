@@ -354,10 +354,17 @@ impl DhtClient {
             match self.get_peers(node.addr, &info_hash).await {
                 Ok((_, Some(token))) => {
                     // Announce with the token
-                    let _ = self.announce_peer(node.addr, &info_hash, port, token).await;
+                    if let Err(e) = self.announce_peer(node.addr, &info_hash, port, token).await {
+                        tracing::debug!("Failed to announce to node {}: {}", node.addr, e);
+                    }
+                }
+                Err(e) => {
+                    // Skip nodes that don't respond or don't provide a token
+                    tracing::debug!("Failed to get peers from node {}: {}", node.addr, e);
+                    continue;
                 }
                 _ => {
-                    // Skip nodes that don't respond or don't provide a token
+                    tracing::debug!("Node {} did not provide a token", node.addr);
                     continue;
                 }
             }

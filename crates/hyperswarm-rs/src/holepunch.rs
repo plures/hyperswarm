@@ -99,7 +99,9 @@ impl HolepunchSession {
     pub async fn probe(&mut self, candidates: &[Candidate]) -> Result<(), HolepunchError> {
         for candidate in candidates {
             // Send probe message to create NAT binding
-            let _ = self.socket.send_to(PROBE_MESSAGE, candidate.addr).await;
+            if let Err(e) = self.socket.send_to(PROBE_MESSAGE, candidate.addr).await {
+                tracing::debug!("Failed to probe candidate {}: {}", candidate.addr, e);
+            }
         }
         Ok(())
     }
