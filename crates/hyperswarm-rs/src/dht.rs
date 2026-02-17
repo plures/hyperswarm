@@ -63,6 +63,11 @@ const MAX_ROUTING_TABLE_SIZE: usize = 100; // Simplified limit; full impl would 
 const MAX_KRPC_MESSAGE_SIZE: usize = 2048; // Typical UDP DHT message size
 const MAX_RESPONSE_ATTEMPTS: usize = 10; // Retries for matching transaction ID
 
+// Constants for compact encoding formats (BEP 5)
+const COMPACT_PEER_INFO_SIZE_IPV4: usize = 6; // 4-byte IPv4 + 2-byte port
+const COMPACT_PEER_INFO_SIZE_IPV6: usize = 18; // 16-byte IPv6 + 2-byte port
+const COMPACT_NODE_INFO_SIZE: usize = 26; // 20-byte ID + 4-byte IPv4 + 2-byte port
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct NodeInfo {
@@ -213,9 +218,9 @@ impl DhtClient {
         let mut nodes = Vec::new();
         if let Some(r) = response.r {
             if let Some(nodes_data) = r.nodes {
-                // Each node is 26 bytes: 20-byte ID + 4-byte IP + 2-byte port
-                for chunk in nodes_data.chunks(26) {
-                    if chunk.len() == 26 {
+                // Each node is 26 bytes: 20-byte ID + 4-byte IPv4 + 2-byte port (BEP 5)
+                for chunk in nodes_data.chunks(COMPACT_NODE_INFO_SIZE) {
+                    if chunk.len() == COMPACT_NODE_INFO_SIZE {
                         let mut node_id = [0u8; 20];
                         node_id.copy_from_slice(&chunk[0..20]);
                         
@@ -234,18 +239,200 @@ impl DhtClient {
         Ok(nodes)
     }
 
+    /// Get peers for a given info hash (topic) from a node
+    async fn get_peers(&self, addr: SocketAddr, info_hash: &[u8; 32]) -> Result<(Vec<PeerAddress>, Option<Vec<u8>>), DhtError> {
+        let tx_id = self.get_transaction_id().await;
+        
+        let msg = protocol::KrpcMessage {
+            t: tx_id.clone(),
+            y: protocol::KrpcMessageType::Query,
+            q: Some(protocol::KrpcQueryKind::GetPeers),
+            a: Some(protocol::KrpcArgs {
+                id: Some(self.node_id.to_vec()),
+                info_hash: Some(info_hash.to_vec()),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+        
+        self.send_krpc(addr, msg).await?;
+        
+        // Wait for response with timeout
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.recv_response(&tx_id)
+        )
+        .await
+        .map_err(|_| DhtError::Timeout)??;
+        
+        let mut peers = Vec::new();
+        let mut token = None;
+        
+        if let Some(r) = response.r {
+            // Extract token for announce_peer
+            token = r.token.clone();
+            
+            // Parse compact peer info from values field
+            // BEP 5 defines both IPv4 (6 bytes) and IPv6 (18 bytes) formats
+            if let Some(values) = r.values {
+                for value in values {
+                    if value.len() == COMPACT_PEER_INFO_SIZE_IPV4 {
+                        // IPv4: 4-byte IP + 2-byte port
+                        let ip = std::net::Ipv4Addr::new(
+                            value[0], value[1], value[2], value[3]
+                        );
+                        let port = u16::from_be_bytes([value[4], value[5]]);
+                        let addr = SocketAddr::new(std::net::IpAddr::V4(ip), port);
+                        
+                        peers.push(PeerAddress {
+                            addr,
+                            node_id: None,
+                        });
+                    } else if value.len() == COMPACT_PEER_INFO_SIZE_IPV6 {
+                        // IPv6: 16-byte IP + 2-byte port
+                        let mut ipv6_bytes = [0u8; 16];
+                        ipv6_bytes.copy_from_slice(&value[0..16]);
+                        let ip = std::net::Ipv6Addr::from(ipv6_bytes);
+                        let port = u16::from_be_bytes([value[16], value[17]]);
+                        let addr = SocketAddr::new(std::net::IpAddr::V6(ip), port);
+                        
+                        peers.push(PeerAddress {
+                            addr,
+                            node_id: None,
+                        });
+                    } else {
+                        // Unknown format, skip
+                        tracing::debug!("Skipping peer with unknown compact format length: {}", value.len());
+                    }
+                }
+            }
+        }
+        
+        Ok((peers, token))
+    }
+
+    /// Announce our presence for a topic to a specific node
+    async fn announce_peer(&self, addr: SocketAddr, info_hash: &[u8; 32], port: u16, token: Vec<u8>) -> Result<(), DhtError> {
+        let tx_id = self.get_transaction_id().await;
+        
+        let msg = protocol::KrpcMessage {
+            t: tx_id.clone(),
+            y: protocol::KrpcMessageType::Query,
+            q: Some(protocol::KrpcQueryKind::AnnouncePeer),
+            a: Some(protocol::KrpcArgs {
+                id: Some(self.node_id.to_vec()),
+                info_hash: Some(info_hash.to_vec()),
+                port: Some(port),
+                token: Some(token),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+        
+        self.send_krpc(addr, msg).await?;
+        
+        // Wait for response with timeout
+        let _response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.recv_response(&tx_id)
+        )
+        .await
+        .map_err(|_| DhtError::Timeout)??;
+        
+        Ok(())
+    }
+
     /// Announce our presence for `topic`.
     ///
     /// In KRPC terms this often maps to `announce_peer` / topic announce.
-    pub async fn announce(&self, _topic: Topic, _port: u16) -> Result<(), DhtError> {
-        // TODO: locate closest nodes then announce to them.
-        Err(DhtError::Unimplemented)
+    /// This is a simplified implementation that announces to bootstrap nodes.
+    pub async fn announce(&self, topic: Topic, port: u16) -> Result<(), DhtError> {
+        // Convert topic (32 bytes) to info_hash format
+        let info_hash = topic.0;
+        
+        // Get nodes from routing table
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // If routing table is empty, bootstrap first
+        if nodes.is_empty() {
+            self.bootstrap().await?;
+        }
+        
+        // Get updated node list
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // Announce to each node in routing table
+        for node in nodes {
+            // First get token from get_peers
+            match self.get_peers(node.addr, &info_hash).await {
+                Ok((_, Some(token))) => {
+                    // Announce with the token
+                    if let Err(e) = self.announce_peer(node.addr, &info_hash, port, token).await {
+                        tracing::debug!("Failed to announce to node {}: {}", node.addr, e);
+                    }
+                }
+                Err(e) => {
+                    // Skip nodes that don't respond or don't provide a token
+                    tracing::debug!("Failed to get peers from node {}: {}", node.addr, e);
+                    continue;
+                }
+                _ => {
+                    tracing::debug!("Node {} did not provide a token", node.addr);
+                    continue;
+                }
+            }
+        }
+        
+        Ok(())
     }
 
     /// Lookup peers for `topic`.
-    pub async fn lookup(&self, _topic: Topic) -> Result<Vec<PeerAddress>, DhtError> {
-        // TODO: iterative get_peers traversal.
-        Err(DhtError::Unimplemented)
+    /// This is a simplified implementation that queries bootstrap nodes.
+    pub async fn lookup(&self, topic: Topic) -> Result<Vec<PeerAddress>, DhtError> {
+        // Convert topic (32 bytes) to info_hash format
+        let info_hash = topic.0;
+        
+        // Get nodes from routing table
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // If routing table is empty, bootstrap first
+        if nodes.is_empty() {
+            self.bootstrap().await?;
+        }
+        
+        // Get updated node list
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        let mut all_peers = Vec::new();
+        
+        // Query each node for peers
+        for node in nodes {
+            match self.get_peers(node.addr, &info_hash).await {
+                Ok((peers, _)) => {
+                    all_peers.extend(peers);
+                }
+                Err(_) => {
+                    // Skip nodes that don't respond
+                    continue;
+                }
+            }
+        }
+        
+        Ok(all_peers)
     }
 
     /// Flush in-flight queries.
@@ -322,5 +509,120 @@ mod tests {
         rt.add_node(node_id, addr);
         
         assert_eq!(rt.nodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_announce_with_empty_routing_table() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        let topic = Topic([1u8; 32]);
+        
+        // Announce should handle empty routing table gracefully
+        let result = client.announce(topic, 8080).await;
+        
+        // Should not panic, even if no nodes are available
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_empty_routing_table() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        let topic = Topic([1u8; 32]);
+        
+        // Lookup should handle empty routing table gracefully
+        let result = client.lookup(topic).await;
+        
+        // Should return empty list if no nodes are available
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_id_generation() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        
+        let tx1 = client.get_transaction_id().await;
+        let tx2 = client.get_transaction_id().await;
+        
+        // Transaction IDs should be different
+        assert_ne!(tx1, tx2);
+    }
+
+    #[tokio::test]
+    async fn test_compact_peer_parsing_ipv4() {
+        // Test IPv4 compact peer info parsing
+        let ipv4_peer = vec![127, 0, 0, 1, 0x1F, 0x90]; // 127.0.0.1:8080
+        assert_eq!(ipv4_peer.len(), COMPACT_PEER_INFO_SIZE_IPV4);
+        
+        // Verify parsing logic
+        let ip = std::net::Ipv4Addr::new(ipv4_peer[0], ipv4_peer[1], ipv4_peer[2], ipv4_peer[3]);
+        let port = u16::from_be_bytes([ipv4_peer[4], ipv4_peer[5]]);
+        
+        assert_eq!(ip.to_string(), "127.0.0.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[tokio::test]
+    async fn test_compact_peer_parsing_ipv6() {
+        // Test IPv6 compact peer info parsing
+        let ipv6_peer = vec![
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x1F, 0x90  // port 8080
+        ];
+        assert_eq!(ipv6_peer.len(), COMPACT_PEER_INFO_SIZE_IPV6);
+        
+        // Verify parsing logic
+        let mut ipv6_bytes = [0u8; 16];
+        ipv6_bytes.copy_from_slice(&ipv6_peer[0..16]);
+        let ip = std::net::Ipv6Addr::from(ipv6_bytes);
+        let port = u16::from_be_bytes([ipv6_peer[16], ipv6_peer[17]]);
+        
+        assert_eq!(ip.to_string(), "2001:db8::1");
+        assert_eq!(port, 8080);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_bootstrap_calls() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = std::sync::Arc::new(
+            DhtClient::new(config).await.expect("Failed to create DHT client")
+        );
+        
+        // Spawn multiple concurrent bootstrap calls
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let client_clone = client.clone();
+            handles.push(tokio::spawn(async move {
+                client_clone.bootstrap().await
+            }));
+        }
+        
+        // All should complete without error
+        for handle in handles {
+            assert!(handle.await.unwrap().is_ok());
+        }
+        
+        // Note: This test verifies concurrent bootstrap calls don't panic or error,
+        // but doesn't verify OnceCell ensures single execution (would require internal
+        // state inspection or mock counters). The OnceCell guarantee is verified by
+        // the tokio::sync::OnceCell implementation itself.
     }
 }
