@@ -92,7 +92,12 @@ impl EncryptedStream {
         self.socket.send_to(&buf[..len], self.remote_addr).await?;
 
         // <- e, ee, s, es
-        let (recv_len, _) = self.socket.recv_from(&mut buf).await?;
+        let recv_len = loop {
+            let (recv_len, src_addr) = self.socket.recv_from(&mut buf).await?;
+            if src_addr == self.remote_addr {
+                break recv_len;
+            }
+        };
         
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
