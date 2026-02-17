@@ -63,6 +63,10 @@ const MAX_ROUTING_TABLE_SIZE: usize = 100; // Simplified limit; full impl would 
 const MAX_KRPC_MESSAGE_SIZE: usize = 2048; // Typical UDP DHT message size
 const MAX_RESPONSE_ATTEMPTS: usize = 10; // Retries for matching transaction ID
 
+// Constants for compact encoding formats (BEP 5)
+const COMPACT_PEER_INFO_SIZE: usize = 6; // 4-byte IPv4 + 2-byte port
+const COMPACT_NODE_INFO_SIZE: usize = 26; // 20-byte ID + 4-byte IPv4 + 2-byte port
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 struct NodeInfo {
@@ -213,9 +217,9 @@ impl DhtClient {
         let mut nodes = Vec::new();
         if let Some(r) = response.r {
             if let Some(nodes_data) = r.nodes {
-                // Each node is 26 bytes: 20-byte ID + 4-byte IP + 2-byte port
-                for chunk in nodes_data.chunks(26) {
-                    if chunk.len() == 26 {
+                // Each node is 26 bytes: 20-byte ID + 4-byte IPv4 + 2-byte port (BEP 5)
+                for chunk in nodes_data.chunks(COMPACT_NODE_INFO_SIZE) {
+                    if chunk.len() == COMPACT_NODE_INFO_SIZE {
                         let mut node_id = [0u8; 20];
                         node_id.copy_from_slice(&chunk[0..20]);
                         
@@ -271,8 +275,8 @@ impl DhtClient {
             // Parse compact peer info from values field
             if let Some(values) = r.values {
                 for value in values {
-                    // Each peer is 6 bytes: 4-byte IP + 2-byte port
-                    if value.len() == 6 {
+                    // Each peer is 6 bytes: 4-byte IPv4 + 2-byte port (BEP 5)
+                    if value.len() == COMPACT_PEER_INFO_SIZE {
                         let ip = std::net::Ipv4Addr::new(
                             value[0], value[1], value[2], value[3]
                         );
