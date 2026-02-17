@@ -135,12 +135,12 @@ impl DhtClient {
         for node_addr in bootstrap_nodes {
             // Try to resolve and ping each bootstrap node
             // Use a shorter timeout for DNS resolution
-            let resolve_result = tokio::time::timeout(
+            let timeout_result = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
                 tokio::net::lookup_host(&node_addr)
             ).await;
             
-            match resolve_result {
+            match timeout_result {
                 Ok(Ok(mut addrs)) => {
                     if let Some(addr) = addrs.next() {
                         // Send ping to bootstrap node with timeout
