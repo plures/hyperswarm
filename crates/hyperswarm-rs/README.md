@@ -12,8 +12,8 @@ This crate is **feature-complete** for demonstration and development purposes. C
 **⚠️ Security Notice:** This implementation requires additional security hardening before production deployment:
 - Noise handshake lacks peer authentication (no validation of remote static keys)
 - Holepunch messages use unauthenticated plain text
-- IPv4-only support (no IPv6)
 - Limited retry logic and error handling
+- No comprehensive security audit performed
 
 For production use in PluresDB, implement additional security measures including peer authentication, message authentication, and comprehensive security auditing.
 
@@ -26,13 +26,13 @@ For production use in PluresDB, implement additional security measures including
 - ✅ UDP holepunching with probe/punch protocol
 - ✅ Noise XX protocol encryption for secure transport
 - ✅ Address verification to prevent spoofing attacks
+- ✅ IPv6 support in DHT compact peer parsing (BEP 5)
 - ✅ Basic test coverage
 - ✅ Working examples demonstrating all features
 
 ### TODO (Production Readiness)
 - ⏳ Peer authentication in Noise handshake
 - ⏳ Authenticated holepunch messages (HMAC)
-- ⏳ IPv6 support in compact peer encoding
 - ⏳ Full k-bucket routing table optimization
 - ⏳ Iterative DHT traversal for wider peer discovery
 - ⏳ Retry logic and timeout configuration

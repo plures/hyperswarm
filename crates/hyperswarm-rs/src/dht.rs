@@ -620,8 +620,9 @@ mod tests {
             assert!(handle.await.unwrap().is_ok());
         }
         
-        // Bootstrap should have only run once due to OnceCell
-        // (We can't directly verify this without internal state inspection,
-        // but at least we verify no panics or errors occur)
+        // Note: This test verifies concurrent bootstrap calls don't panic or error,
+        // but doesn't verify OnceCell ensures single execution (would require internal
+        // state inspection or mock counters). The OnceCell guarantee is verified by
+        // the tokio::sync::OnceCell implementation itself.
     }
 }
