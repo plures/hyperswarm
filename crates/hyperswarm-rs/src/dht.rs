@@ -145,13 +145,13 @@ impl DhtClient {
                     if let Some(addr) = addrs.next() {
                         // Send ping to bootstrap node with timeout
                         // Use a shorter timeout (2 seconds instead of 5)
-                        let ping_result = tokio::time::timeout(
+                        let ping_timeout_result = tokio::time::timeout(
                             std::time::Duration::from_secs(2),
                             self.ping(addr)
                         ).await;
                         
                         // Silently ignore errors and timeouts
-                        let _ = ping_result;
+                        let _ = ping_timeout_result;
                     }
                 }
                 _ => {
