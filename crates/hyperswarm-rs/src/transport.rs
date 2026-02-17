@@ -162,7 +162,6 @@ impl EncryptedStream {
 
         // <- e
         let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
-        let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
         let (recv_len, _) = self.socket.recv_from(&mut buf).await?;
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
