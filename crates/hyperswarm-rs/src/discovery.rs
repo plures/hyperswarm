@@ -37,9 +37,20 @@ impl DiscoveryManager {
 
     pub async fn join(&self, dht: &dht::DhtClient, topic: Topic) -> Result<(), DiscoveryError> {
         self.topics.write().await.insert(topic);
-        // TODO: announce periodically; run iterative lookups; connect to peers.
-        let _ = (dht, self.config.max_peers);
-        Err(DiscoveryError::Unimplemented)
+        
+        // Announce our presence on the DHT for this topic
+        // Use port 0 to indicate we're interested but not listening on a specific port
+        dht.announce(topic, 0).await?;
+        
+        // Perform initial lookup to find peers
+        let peers = dht.lookup(topic).await?;
+        
+        tracing::debug!("Joined topic with {} peers found", peers.len());
+        
+        // TODO: periodically re-announce and lookup; connect to peers.
+        let _ = self.config.max_peers;
+        
+        Ok(())
     }
 
     pub async fn leave(&self, _dht: &dht::DhtClient, topic: Topic) -> Result<(), DiscoveryError> {

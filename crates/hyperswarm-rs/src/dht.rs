@@ -234,18 +234,177 @@ impl DhtClient {
         Ok(nodes)
     }
 
+    /// Get peers for a given info hash (topic) from a node
+    async fn get_peers(&self, addr: SocketAddr, info_hash: &[u8; 32]) -> Result<(Vec<PeerAddress>, Option<Vec<u8>>), DhtError> {
+        let tx_id = self.get_transaction_id().await;
+        
+        let msg = protocol::KrpcMessage {
+            t: tx_id.clone(),
+            y: protocol::KrpcMessageType::Query,
+            q: Some(protocol::KrpcQueryKind::GetPeers),
+            a: Some(protocol::KrpcArgs {
+                id: Some(self.node_id.to_vec()),
+                info_hash: Some(info_hash.to_vec()),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+        
+        self.send_krpc(addr, msg).await?;
+        
+        // Wait for response with timeout
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.recv_response(&tx_id)
+        )
+        .await
+        .map_err(|_| DhtError::Timeout)??;
+        
+        let mut peers = Vec::new();
+        let mut token = None;
+        
+        if let Some(r) = response.r {
+            // Extract token for announce_peer
+            token = r.token.clone();
+            
+            // Parse compact peer info from values field
+            if let Some(values) = r.values {
+                for value in values {
+                    // Each peer is 6 bytes: 4-byte IP + 2-byte port
+                    if value.len() == 6 {
+                        let ip = std::net::Ipv4Addr::new(
+                            value[0], value[1], value[2], value[3]
+                        );
+                        let port = u16::from_be_bytes([value[4], value[5]]);
+                        let addr = SocketAddr::new(std::net::IpAddr::V4(ip), port);
+                        
+                        peers.push(PeerAddress {
+                            addr,
+                            node_id: None,
+                        });
+                    }
+                }
+            }
+        }
+        
+        Ok((peers, token))
+    }
+
+    /// Announce our presence for a topic to a specific node
+    async fn announce_peer(&self, addr: SocketAddr, info_hash: &[u8; 32], port: u16, token: Vec<u8>) -> Result<(), DhtError> {
+        let tx_id = self.get_transaction_id().await;
+        
+        let msg = protocol::KrpcMessage {
+            t: tx_id.clone(),
+            y: protocol::KrpcMessageType::Query,
+            q: Some(protocol::KrpcQueryKind::AnnouncePeer),
+            a: Some(protocol::KrpcArgs {
+                id: Some(self.node_id.to_vec()),
+                info_hash: Some(info_hash.to_vec()),
+                port: Some(port),
+                token: Some(token),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+        
+        self.send_krpc(addr, msg).await?;
+        
+        // Wait for response with timeout
+        let _response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.recv_response(&tx_id)
+        )
+        .await
+        .map_err(|_| DhtError::Timeout)??;
+        
+        Ok(())
+    }
+
     /// Announce our presence for `topic`.
     ///
     /// In KRPC terms this often maps to `announce_peer` / topic announce.
-    pub async fn announce(&self, _topic: Topic, _port: u16) -> Result<(), DhtError> {
-        // TODO: locate closest nodes then announce to them.
-        Err(DhtError::Unimplemented)
+    /// This is a simplified implementation that announces to bootstrap nodes.
+    pub async fn announce(&self, topic: Topic, port: u16) -> Result<(), DhtError> {
+        // Convert topic (32 bytes) to info_hash format
+        let info_hash = topic.0;
+        
+        // Get nodes from routing table
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // If routing table is empty, bootstrap first
+        if nodes.is_empty() {
+            self.bootstrap().await?;
+        }
+        
+        // Get updated node list
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // Announce to each node in routing table
+        for node in nodes {
+            // First get token from get_peers
+            match self.get_peers(node.addr, &info_hash).await {
+                Ok((_, Some(token))) => {
+                    // Announce with the token
+                    let _ = self.announce_peer(node.addr, &info_hash, port, token).await;
+                }
+                _ => {
+                    // Skip nodes that don't respond or don't provide a token
+                    continue;
+                }
+            }
+        }
+        
+        Ok(())
     }
 
     /// Lookup peers for `topic`.
-    pub async fn lookup(&self, _topic: Topic) -> Result<Vec<PeerAddress>, DhtError> {
-        // TODO: iterative get_peers traversal.
-        Err(DhtError::Unimplemented)
+    /// This is a simplified implementation that queries bootstrap nodes.
+    pub async fn lookup(&self, topic: Topic) -> Result<Vec<PeerAddress>, DhtError> {
+        // Convert topic (32 bytes) to info_hash format
+        let info_hash = topic.0;
+        
+        // Get nodes from routing table
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        // If routing table is empty, bootstrap first
+        if nodes.is_empty() {
+            self.bootstrap().await?;
+        }
+        
+        // Get updated node list
+        let nodes = {
+            let rt = self.routing_table.lock().await;
+            rt.get_nodes(10)
+        };
+        
+        let mut all_peers = Vec::new();
+        
+        // Query each node for peers
+        for node in nodes {
+            match self.get_peers(node.addr, &info_hash).await {
+                Ok((peers, _)) => {
+                    all_peers.extend(peers);
+                }
+                Err(_) => {
+                    // Skip nodes that don't respond
+                    continue;
+                }
+            }
+        }
+        
+        Ok(all_peers)
     }
 
     /// Flush in-flight queries.
@@ -322,5 +481,55 @@ mod tests {
         rt.add_node(node_id, addr);
         
         assert_eq!(rt.nodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_announce_with_empty_routing_table() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        let topic = Topic([1u8; 32]);
+        
+        // Announce should handle empty routing table gracefully
+        let result = client.announce(topic, 8080).await;
+        
+        // Should not panic, even if no nodes are available
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_lookup_with_empty_routing_table() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        let topic = Topic([1u8; 32]);
+        
+        // Lookup should handle empty routing table gracefully
+        let result = client.lookup(topic).await;
+        
+        // Should return empty list if no nodes are available
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_id_generation() {
+        let config = DhtConfig {
+            bootstrap: vec![],
+            bind_port: 0,
+        };
+
+        let client = DhtClient::new(config).await.expect("Failed to create DHT client");
+        
+        let tx1 = client.get_transaction_id().await;
+        let tx2 = client.get_transaction_id().await;
+        
+        // Transaction IDs should be different
+        assert_ne!(tx1, tx2);
     }
 }
