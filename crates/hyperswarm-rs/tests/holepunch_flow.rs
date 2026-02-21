@@ -10,13 +10,16 @@ mod common;
 use hyperswarm::holepunch::{Candidate, CandidateKind, HolepunchSession};
 use std::time::Duration;
 
+/// Shared session key used for all authenticated holepunch tests.
+const TEST_KEY: [u8; 32] = [0xABu8; 32];
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_holepunch_initiate_and_respond() {
     // Create two holepunch sessions
-    let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session1");
-    let mut session2 = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session2 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session2");
     
@@ -81,7 +84,7 @@ async fn test_holepunch_initiate_and_respond() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_holepunch_probe_phase() {
     // Test the probe phase independently
-    let mut session = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session");
     
@@ -114,10 +117,10 @@ async fn test_holepunch_probe_phase() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_holepunch_with_multiple_candidates() {
     // Test holepunch with multiple candidate addresses
-    let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session1");
-    let mut session2 = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session2 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session2");
     
@@ -179,7 +182,7 @@ async fn test_holepunch_with_multiple_candidates() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_holepunch_timeout_with_no_candidates() {
     // Test that holepunch fails gracefully when no viable candidates
-    let mut session = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
+    let mut session = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_KEY)
         .await
         .expect("Failed to create session");
     
@@ -189,4 +192,58 @@ async fn test_holepunch_timeout_with_no_candidates() {
     assert!(result.is_err(), "Should fail with no candidates");
     
     println!("✓ Holepunch with no candidates test passed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_holepunch_mismatched_keys_fail() {
+    // If the two sessions use different session keys the MAC verification will
+    // fail on both sides, so neither peer will accept the other's punch packet.
+    // The initiator should time out (no valid response from responder).
+
+    let key_a = [0x11u8; 32];
+    let key_b = [0x22u8; 32]; // different key
+
+    let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), key_a)
+        .await
+        .expect("Failed to create session1");
+    let mut session2 = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), key_b)
+        .await
+        .expect("Failed to create session2");
+
+    let addr1 = session1.local_addr().expect("Failed to get addr1");
+    let addr2 = session2.local_addr().expect("Failed to get addr2");
+
+    let candidates_for_2 = vec![Candidate { addr: addr2, kind: CandidateKind::Lan }];
+    let candidates_for_1 = vec![Candidate { addr: addr1, kind: CandidateKind::Lan }];
+
+    // Run both sides concurrently; both should time out or fail.
+    let respond_task = tokio::spawn(async move {
+        session2.respond(candidates_for_1).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let initiate_task = tokio::spawn(async move {
+        session1.initiate(candidates_for_2).await
+    });
+
+    // Wait only for the initiator — it should fail quickly (within the 2-second
+    // punch deadline) once it receives an unauthenticated reply from the responder.
+    let initiate_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        initiate_task,
+    )
+    .await
+    .expect("initiator did not complete in time")
+    .expect("initiate task panicked");
+
+    // Abort the responder task so the test does not wait for its full PUNCH_TIMEOUT.
+    respond_task.abort();
+
+    assert!(
+        initiate_result.is_err(),
+        "initiator should fail when session keys don't match"
+    );
+
+    println!("✓ Holepunch with mismatched keys correctly fails");
 }

@@ -9,14 +9,6 @@ Rust implementation of **Hyperswarm** (P2P discovery via DHT + NAT holepunching)
 
 This crate is **feature-complete** for demonstration and development purposes. Core P2P functionality is implemented and tested.
 
-**⚠️ Security Notice:** This implementation requires additional security hardening before production deployment:
-- Noise handshake lacks peer authentication (no validation of remote static keys)
-- Holepunch messages use unauthenticated plain text
-- Limited retry logic and error handling
-- No comprehensive security audit performed
-
-For production use in PluresDB, implement additional security measures including peer authentication, message authentication, and comprehensive security auditing.
-
 ### Implemented
 - ✅ DHT client with KRPC protocol support (ping, find_node, get_peers, announce_peer)
 - ✅ Bencode encoding/decoding for KRPC messages
@@ -29,13 +21,13 @@ For production use in PluresDB, implement additional security measures including
 - ✅ IPv6 support in DHT compact peer parsing (BEP 5)
 - ✅ Integration test coverage
 - ✅ Working examples demonstrating all features
+- ✅ Peer authentication in Noise handshake (validates remote static key when provided)
+- ✅ Authenticated holepunch punch packets (Blake2s MAC with shared session key)
+- ✅ Retry logic in holepunch punch phase (retransmit every 200 ms)
 
 ### TODO (Production Readiness)
-- ⏳ Peer authentication in Noise handshake
-- ⏳ Authenticated holepunch messages (HMAC)
 - ⏳ Full k-bucket routing table optimization
 - ⏳ Iterative DHT traversal for wider peer discovery
-- ⏳ Retry logic and timeout configuration
 - ⏳ Connection multiplexing
 - ⏳ Interop testing with JS Hyperswarm
 - ⏳ Security audit and penetration testing
