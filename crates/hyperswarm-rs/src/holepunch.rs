@@ -188,6 +188,9 @@ impl HolepunchSession {
     /// Sends an authenticated punch packet and retransmits every
     /// [`PUNCH_RETRY_INTERVAL`] until the peer responds with a valid
     /// authenticated punch packet or the 2-second deadline expires.
+    ///
+    /// Returns [`HolepunchError::AuthenticationFailed`] if a packet arrives from
+    /// the expected peer address but fails the MAC check (wrong session key).
     async fn punch_to(&self, addr: SocketAddr) -> Result<SocketAddr, HolepunchError> {
         let punch_packet = self.build_punch_packet();
 
@@ -204,17 +207,31 @@ impl HolepunchSession {
                 return Err(HolepunchError::Timeout);
             }
 
-            // Wait at most PUNCH_RETRY_INTERVAL before retransmitting.
-            let wait = remaining.min(PUNCH_RETRY_INTERVAL);
-            match timeout(wait, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, from_addr))) => {
-                    if from_addr == addr && self.verify_punch_packet(&buf[..len]) {
-                        return Ok(addr);
+            // Use tokio::select! so the retransmit timer fires independently of
+            // how many invalid/unauthenticated packets arrive on the socket.
+            // Without this a flood of junk packets could starve the retry timer.
+            tokio::select! {
+                result = self.socket.recv_from(&mut buf) => {
+                    match result {
+                        Ok((len, from_addr)) => {
+                            if from_addr == addr {
+                                if self.verify_punch_packet(&buf[..len]) {
+                                    return Ok(addr);
+                                } else if buf[..len].starts_with(PUNCH_MESSAGE) {
+                                    // Packet has the PUNCH_MESSAGE prefix but the
+                                    // MAC is wrong — the peer is using a different
+                                    // session key.
+                                    return Err(HolepunchError::AuthenticationFailed);
+                                }
+                                // Other packets from the expected peer (e.g. probes)
+                                // are silently ignored.
+                            }
+                            // Packets from other addresses are also ignored.
+                        }
+                        Err(e) => return Err(HolepunchError::Io(e)),
                     }
-                    // Ignore stale, unexpected, or unauthenticated packets.
                 }
-                Ok(Err(e)) => return Err(HolepunchError::Io(e)),
-                Err(_) => {
+                _ = tokio::time::sleep(PUNCH_RETRY_INTERVAL) => {
                     // Retry interval elapsed — retransmit and loop.
                     self.socket.send_to(&punch_packet, addr).await?;
                 }

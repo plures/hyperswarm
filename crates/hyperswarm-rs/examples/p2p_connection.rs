@@ -70,8 +70,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 4: UDP Holepunching
     println!("\nStep 4: UDP Holepunching (demonstration)...");
     let bind_addr = "127.0.0.1:0".parse()?;
-    // In a real deployment the session key is derived from the shared topic.
-    let session_key = [0u8; 32];
+    // Derive the session key from the shared topic hash so both peers can
+    // independently reproduce the same key without an additional exchange.
+    let session_key = topic.0;
     let mut holepunch_session = holepunch::HolepunchSession::new(bind_addr, session_key).await?;
     let local_addr = holepunch_session.local_addr()?;
     println!("  ✓ Holepunch session created on {}", local_addr);

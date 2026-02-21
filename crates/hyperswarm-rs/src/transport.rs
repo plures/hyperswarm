@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_MESSAGE_SIZE: usize = 65535;
@@ -40,8 +41,10 @@ pub struct EncryptedStream {
     remote_static_key: Option<[u8; 32]>,
     /// The local static public key for this stream (constant for the lifetime of the stream).
     local_static_pubkey: [u8; 32],
-    /// The local static private key, kept to allow creating both initiator and responder states.
-    local_static_privkey: Vec<u8>,
+    /// The local static private key.  Stored as a fixed-size array inside a
+    /// `Zeroizing` wrapper so the secret bytes are automatically zeroed when the
+    /// stream is dropped.
+    local_static_privkey: Zeroizing<[u8; 32]>,
 }
 
 enum StreamState {
@@ -66,7 +69,7 @@ impl EncryptedStream {
 
     /// Generate a static keypair, return an initiator handshake state together
     /// with the public and private key bytes.
-    fn generate_keypair_and_initiator() -> Result<(HandshakeState, [u8; 32], Vec<u8>), TransportError> {
+    fn generate_keypair_and_initiator() -> Result<(HandshakeState, [u8; 32], Zeroizing<[u8; 32]>), TransportError> {
         let builder = Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         );
@@ -76,16 +79,18 @@ impl EncryptedStream {
 
         let mut pubkey = [0u8; 32];
         pubkey.copy_from_slice(&keypair.public[..32]);
-        let privkey = keypair.private.to_vec();
+
+        let mut privkey_arr = Zeroizing::new([0u8; 32]);
+        privkey_arr.copy_from_slice(&keypair.private[..32]);
 
         let handshake = Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         )
-        .local_private_key(&privkey)
+        .local_private_key(&*privkey_arr)
         .build_initiator()
         .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
 
-        Ok((handshake, pubkey, privkey))
+        Ok((handshake, pubkey, privkey_arr))
     }
 
     /// Build an initiator handshake state reusing the stored static keypair.
@@ -93,7 +98,7 @@ impl EncryptedStream {
         Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         )
-        .local_private_key(&self.local_static_privkey)
+        .local_private_key(self.local_static_privkey.as_ref())
         .build_initiator()
         .map_err(|e| TransportError::Noise(format!("{:?}", e)))
     }
@@ -103,7 +108,7 @@ impl EncryptedStream {
         Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         )
-        .local_private_key(&self.local_static_privkey)
+        .local_private_key(self.local_static_privkey.as_ref())
         .build_responder()
         .map_err(|e| TransportError::Noise(format!("{:?}", e)))
     }
@@ -169,10 +174,18 @@ impl EncryptedStream {
         self.socket.send_to(&buf[..len], self.remote_addr).await?;
 
         // <- e, ee, s, es
+        // Apply the same shared deadline as the responder to prevent an adversary
+        // from stalling the initiator indefinitely by flooding from wrong addresses.
+        let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
         let recv_len = loop {
-            let (recv_len, src_addr) = self.socket.recv_from(&mut buf).await?;
-            if src_addr == self.remote_addr {
-                break recv_len;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(TransportError::HandshakeIncomplete);
+            }
+            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
+                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
+                Ok(Ok(_)) => {} // ignore packets from unexpected sources
+                _ => return Err(TransportError::HandshakeIncomplete),
             }
         };
         
