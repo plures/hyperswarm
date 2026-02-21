@@ -12,6 +12,10 @@ use tokio::sync::Mutex;
 
 const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const MAX_MESSAGE_SIZE: usize = 65535;
+/// Maximum time allowed to complete a Noise handshake (both roles).
+/// Bounded to prevent an adversary from stalling a handshake indefinitely
+/// by continuously sending spoofed packets from unexpected addresses.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(thiserror::Error, Debug)]
 pub enum TransportError {
@@ -161,8 +165,21 @@ impl EncryptedStream {
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
 
         // <- e
+        // Use a shared deadline so continuous packets from unexpected sources cannot
+        // stall the handshake indefinitely (DoS mitigation).
         let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
-        let (recv_len, _) = self.socket.recv_from(&mut buf).await?;
+        let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
+        let recv_len = loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(TransportError::HandshakeIncomplete);
+            }
+            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
+                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
+                Ok(Ok(_)) => {} // ignore packets from unexpected sources
+                _ => return Err(TransportError::HandshakeIncomplete),
+            }
+        };
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
@@ -175,7 +192,17 @@ impl EncryptedStream {
         self.socket.send_to(&buf[..len], self.remote_addr).await?;
 
         // <- s, se
-        let (recv_len, _) = self.socket.recv_from(&mut buf).await?;
+        let recv_len = loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(TransportError::HandshakeIncomplete);
+            }
+            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
+                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
+                Ok(Ok(_)) => {} // ignore packets from unexpected sources
+                _ => return Err(TransportError::HandshakeIncomplete),
+            }
+        };
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;

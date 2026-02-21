@@ -129,17 +129,25 @@ impl HolepunchSession {
         // Send punch message
         self.socket.send_to(PUNCH_MESSAGE, addr).await?;
 
-        // Wait for acknowledgment
+        // Wait for acknowledgment, draining stale or unexpected packets (e.g.
+        // probe messages that arrived before the punch exchange) until we
+        // receive the expected PUNCH_MESSAGE from `addr` or the deadline fires.
         let mut buf = vec![0u8; 1024];
-        match timeout(Duration::from_secs(2), self.socket.recv_from(&mut buf)).await {
-            Ok(Ok((len, from_addr))) => {
-                if &buf[..len] == PUNCH_MESSAGE && from_addr == addr {
-                    Ok(addr)
-                } else {
-                    Err(HolepunchError::Timeout)
-                }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(HolepunchError::Timeout);
             }
-            _ => Err(HolepunchError::Timeout),
+            match timeout(remaining, self.socket.recv_from(&mut buf)).await {
+                Ok(Ok((len, from_addr))) => {
+                    if &buf[..len] == PUNCH_MESSAGE && from_addr == addr {
+                        return Ok(addr);
+                    }
+                    // Ignore stale or unexpected packets; keep waiting
+                }
+                _ => return Err(HolepunchError::Timeout),
+            }
         }
     }
 

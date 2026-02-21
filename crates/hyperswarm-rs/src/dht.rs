@@ -143,10 +143,11 @@ impl DhtClient {
             match timeout_result {
                 Ok(Ok(mut addrs)) => {
                     if let Some(addr) = addrs.next() {
-                        // Send ping to bootstrap node with timeout
-                        // Use a shorter timeout (2 seconds instead of 5)
+                        // Send ping to bootstrap node with timeout.
+                        // 500ms per node keeps total bootstrap time reasonable
+                        // when probing multiple nodes sequentially.
                         let ping_timeout_result = tokio::time::timeout(
-                            std::time::Duration::from_secs(2),
+                            std::time::Duration::from_millis(500),
                             self.ping(addr)
                         ).await;
                         

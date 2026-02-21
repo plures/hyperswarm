@@ -30,21 +30,21 @@ The integration tests validate end-to-end functionality across four main areas:
 - ✅ Message integrity verification
 - ✅ Multiple sequential messages
 
-### 3. Holepunch Flow (`tests/holepunch_flow.rs`) - 0.05s
+### 3. Holepunch Flow (`tests/holepunch_flow.rs`) - 2.05s
 
 **Tests:**
 - `test_holepunch_probe_phase`: Validates probe message sending
 - `test_holepunch_with_multiple_candidates`: Validates candidate selection
 - `test_holepunch_timeout_with_no_candidates`: Validates error handling
-- `test_holepunch_initiate_and_respond`: ⚠️ Currently ignored (race condition)
+- `test_holepunch_initiate_and_respond`: Validates full initiate/respond flow
 
 **Coverage:**
 - ✅ Probe phase (NAT binding creation)
 - ✅ Multiple candidate handling
 - ✅ Timeout and error conditions
-- ⚠️ Full initiate/respond flow (known issue)
+- ✅ Full initiate/respond flow
 
-### 4. Bootstrap Resilience (`tests/bootstrap_resilience.rs`) - 2.01s
+### 4. Bootstrap Resilience (`tests/bootstrap_resilience.rs`) - 1.51s
 
 **Tests:**
 - `test_bootstrap_with_unreachable_nodes`: Validates timeout behavior
@@ -69,19 +69,17 @@ All integration tests complete within acceptable timeframes:
 |------------|----------|--------|--------|
 | DHT Discovery | 5.10s | ~5s | ⚠️ Slightly over (acceptable) |
 | Encrypted Transport | 0.01s | < 5s | ✅ |
-| Holepunch Flow | 0.05s | < 5s | ✅ |
-| Bootstrap Resilience | 2.01s | < 5s | ✅ |
-| **Total Integration Tests** | **~7.2s** | - | ✅ |
+| Holepunch Flow | 2.05s | < 5s | ✅ |
+| Bootstrap Resilience | 1.51s | < 5s | ✅ |
+| **Total Integration Tests** | **~8.7s** | - | ✅ |
 
 ## Known Limitations
 
 1. **DHT Discovery Timing**: The two-node discovery test takes 5.1s due to internal DHT timeouts. This is slightly over the 5-second target but acceptable given the protocol's design.
 
-2. **Holepunch Race Condition**: `test_holepunch_initiate_and_respond` is currently ignored due to a race condition in the handshake timing between initiator and responder. The probe phase and candidate selection are fully tested, but the full end-to-end flow requires further investigation.
+2. **No Real NAT Testing**: Holepunch tests validate the state machine but don't test against real NAT devices (which would require infrastructure).
 
 3. **Network Isolation**: All tests use localhost (127.0.0.1) and don't require external network access. Bootstrap tests use TEST-NET IP addresses (192.0.2.x) which are guaranteed unreachable.
-
-4. **No Real NAT Testing**: Holepunch tests validate the state machine but don't test against real NAT devices (which would require infrastructure).
 
 ## CI Compatibility
 
@@ -126,11 +124,10 @@ cargo test -- --ignored --nocapture
 - ✅ CI-compatible (no external dependencies)
 - ✅ No `todo!()` stubs in tested code paths
 - ✅ Tests complete in reasonable time (< 10s total)
-- ⚠️ One test ignored due to known race condition
+- ✅ All tests enabled (no ignored tests)
 
 ## Future Improvements
 
-1. Fix holepunch initiate/respond race condition
-2. Optimize DHT discovery test to complete in < 5s
-3. Add tests for error recovery scenarios
-4. Add benchmarks for throughput and latency
+1. Optimize DHT discovery test to complete in < 5s
+2. Add tests for error recovery scenarios
+3. Add benchmarks for throughput and latency
