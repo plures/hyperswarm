@@ -11,7 +11,6 @@ use hyperswarm::holepunch::{Candidate, CandidateKind, HolepunchSession};
 use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore] // Temporarily disabled - race condition in holepunch flow needs investigation
 async fn test_holepunch_initiate_and_respond() {
     // Create two holepunch sessions
     let mut session1 = HolepunchSession::new("127.0.0.1:0".parse().unwrap())
