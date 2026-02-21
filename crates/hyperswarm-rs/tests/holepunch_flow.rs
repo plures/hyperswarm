@@ -227,9 +227,9 @@ async fn test_holepunch_mismatched_keys_fail() {
         session1.initiate(candidates_for_2).await
     });
 
-    // Allow up to 15 seconds for both sides to time out.
+    // Allow up to 12 seconds: the responder's PUNCH_TIMEOUT is 10 s.
     let results = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(12),
         async { tokio::join!(initiate_task, respond_task) },
     )
     .await

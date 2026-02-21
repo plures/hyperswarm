@@ -116,6 +116,22 @@ impl EncryptedStream {
         self.local_static_pubkey
     }
 
+    /// Copy the remote static public key out of a completed `HandshakeState`.
+    ///
+    /// Returns `None` if the handshake has not yet revealed the remote key (which
+    /// should not happen at the expected call sites in the XX flow).
+    fn extract_remote_static(handshake: &snow::HandshakeState) -> Option<[u8; 32]> {
+        handshake.get_remote_static().and_then(|k| {
+            if k.len() >= 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&k[..32]);
+                Some(arr)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Perform Noise XX handshake as initiator.
     ///
     /// If `remote_static_pubkey` is provided, the handshake will verify that the
@@ -166,15 +182,7 @@ impl EncryptedStream {
 
         // The remote static key ('s') is now revealed by the XX handshake.
         // Copy it out before consuming the handshake state.
-        let remote_static: Option<[u8; 32]> = handshake.get_remote_static().and_then(|k| {
-            if k.len() >= 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&k[..32]);
-                Some(arr)
-            } else {
-                None
-            }
-        });
+        let remote_static = Self::extract_remote_static(&handshake);
 
         // Validate the remote key if the caller supplied an expected value.
         if let Some(expected) = remote_static_pubkey {
@@ -258,15 +266,7 @@ impl EncryptedStream {
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
 
         // The initiator's static key ('s') is now revealed by the XX handshake.
-        let remote_static: Option<[u8; 32]> = handshake.get_remote_static().and_then(|k| {
-            if k.len() >= 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&k[..32]);
-                Some(arr)
-            } else {
-                None
-            }
-        });
+        let remote_static = Self::extract_remote_static(&handshake);
 
         // Transition to transport mode
         let transport = handshake

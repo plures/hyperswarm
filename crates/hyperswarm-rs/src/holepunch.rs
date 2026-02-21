@@ -88,7 +88,7 @@ impl HolepunchSession {
     /// MAC = Blake2sMac256(key = session_key, msg = PUNCH_MESSAGE)
     fn compute_punch_mac(&self) -> [u8; 32] {
         let mut mac = <Blake2sMac256 as KeyInit>::new_from_slice(&self.session_key)
-            .expect("BLAKE2s accepts any key up to 32 bytes");
+            .expect("session_key is exactly 32 bytes, which is valid for Blake2sMac256");
         Mac::update(&mut mac, PUNCH_MESSAGE);
         Mac::finalize(mac).into_bytes().into()
     }
@@ -111,7 +111,7 @@ impl HolepunchSession {
             return false;
         }
         let mut mac = <Blake2sMac256 as KeyInit>::new_from_slice(&self.session_key)
-            .expect("BLAKE2s accepts any key up to 32 bytes");
+            .expect("session_key is exactly 32 bytes, which is valid for Blake2sMac256");
         Mac::update(&mut mac, PUNCH_MESSAGE);
         // verify_slice performs a constant-time comparison.
         mac.verify_slice(&data[PUNCH_MESSAGE.len()..]).is_ok()
