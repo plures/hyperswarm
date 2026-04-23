@@ -1,0 +1,29 @@
+# Changelog
+
+## [4.18.0] — 2026-04-23
+
+- feat(release): add target_version input for milestone-driven releases (16a0e91)
+- feat(lifecycle): milestone-close triggers roadmap-aware release (9485c5d)
+- fix(lifecycle): label-based retry counter + CI fix priority (35324cd)
+- Security hardening: Noise peer authentication, MAC-authenticated holepunch, punch retry logic (#10) (bbe4abd)
+- Merge branch 'holepunchto:main' into main (2c101a6)
+- Fix 2 failing tests, 1 ignored test, and handshake address injection vulnerability (#8) (d0aef80)
+- lint (6abaa28)
+- bare ci also (42de348)
+- Add limit opt to readme (#193) (504a5dc)
+- 4.17.0 (e7f4657)
+- format (4c93744)
+- make explicit peers yield more capacity (fde62c0)
+- Add integration tests for DHT discovery and encrypted P2P streams (#6) (ccc4d26)
+- Implement Rust DHT client with holepunching, Noise encryption, and IPv6 support (#4) (fe94d10)
+- Merge pull request #2 from plures/copilot/implement-rust-dht-client (b60148a)
+- Fix bootstrap error handling logic (4d72857)
+- Fix bootstrap error handling logic (d7fb2bd)
+- Address code review feedback: add constants and improve error messages (e9c7dfa)
+- Add find_node implementation, example, and documentation (80240db)
+- Implement basic DHT client with KRPC protocol support (dbb832b)
+- Initial plan (7c68752)
+- feat: scaffold Rust implementation of Hyperswarm for PluresDB sync (3000304)
+- Add missing CI (#205) (1bbce1f)
+- Add linter and update CI (#204) (801ae77)
+
