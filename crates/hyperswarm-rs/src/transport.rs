@@ -18,6 +18,8 @@ const MAX_MESSAGE_SIZE: usize = 65535;
 /// by continuously sending spoofed packets from unexpected addresses.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+type InitiatorKeyMaterial = (HandshakeState, [u8; 32], Zeroizing<[u8; 32]>);
+
 #[derive(thiserror::Error, Debug)]
 pub enum TransportError {
     #[error("io: {0}")]
@@ -48,7 +50,7 @@ pub struct EncryptedStream {
 }
 
 enum StreamState {
-    Handshaking(HandshakeState),
+    Handshaking(Box<HandshakeState>),
     Established(TransportState),
 }
 
@@ -60,7 +62,7 @@ impl EncryptedStream {
         Ok(Self {
             socket,
             remote_addr,
-            state: Arc::new(Mutex::new(StreamState::Handshaking(handshake))),
+            state: Arc::new(Mutex::new(StreamState::Handshaking(Box::new(handshake)))),
             remote_static_key: None,
             local_static_pubkey,
             local_static_privkey,
@@ -69,7 +71,7 @@ impl EncryptedStream {
 
     /// Generate a static keypair, return an initiator handshake state together
     /// with the public and private key bytes.
-    fn generate_keypair_and_initiator() -> Result<(HandshakeState, [u8; 32], Zeroizing<[u8; 32]>), TransportError> {
+    fn generate_keypair_and_initiator() -> Result<InitiatorKeyMaterial, TransportError> {
         let builder = Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         );
@@ -155,8 +157,11 @@ impl EncryptedStream {
                 StreamState::Handshaking(_) => {
                     // Replace with a placeholder so the lock can be released while
                     // we perform network I/O.
-                    match std::mem::replace(&mut *state, StreamState::Handshaking(self.make_initiator_state()?)) {
-                        StreamState::Handshaking(h) => h,
+                    match std::mem::replace(
+                        &mut *state,
+                        StreamState::Handshaking(Box::new(self.make_initiator_state()?)),
+                    ) {
+                        StreamState::Handshaking(h) => *h,
                         _ => unreachable!(),
                     }
                 }
