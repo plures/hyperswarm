@@ -6,7 +6,7 @@ pub async fn create_test_dht_client() -> Result<hyperswarm::dht::DhtClient, Box<
     use hyperswarm::dht::DhtConfig;
     
     let config = DhtConfig {
-        bootstrap: vec![], // No external bootstrap for local tests
+        bootstrap: vec!["192.0.2.1:6881".to_string()], // RFC 5737 TEST-NET-1
         bind_port: 0, // OS-assigned port
     };
     

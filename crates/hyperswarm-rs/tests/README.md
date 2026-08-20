@@ -6,17 +6,18 @@ This document summarizes the integration tests added for the Hyperswarm DHT clie
 
 The integration tests validate end-to-end functionality across four main areas:
 
-### 1. DHT Discovery (`tests/dht_discovery.rs`) - 5.1s
+### 1. DHT Discovery (`tests/local_krpc_bootstrap.rs`)
 
 **Tests:**
-- `test_two_node_localhost_discovery`: Validates two DHT clients can announce and lookup topics on localhost
-- `test_announce_and_lookup_same_client`: Validates single client announce/lookup operations
+- `announce_then_lookup_uses_real_local_krpc_bootstrap`: Validates bootstrap, token-bearing announce, and lookup over real localhost UDP with no manual routing-table mutation
+- `discovery_announces_the_bound_udp_port`: Validates the high-level discovery manager advertises a usable bound UDP port, never port zero
+- `test_announce_and_lookup_same_client`: Validates graceful behavior when an explicitly configured TEST-NET bootstrap cannot respond
 
 **Coverage:**
 - ✅ Topic-based peer discovery  
 - ✅ Announce and lookup operations
-- ✅ Routing table population
-- ✅ Local multi-node communication
+- ✅ Routing-table population through the production bootstrap path
+- ✅ Local UDP bootstrap, announce, and lookup with exact peer-address assertion
 
 ### 2. Encrypted Transport (`tests/encrypted_transport.rs`) - 0.01s
 
@@ -67,15 +68,15 @@ All integration tests complete within acceptable timeframes:
 
 | Test Suite | Duration | Target | Status |
 |------------|----------|--------|--------|
-| DHT Discovery | 5.10s | ~5s | ⚠️ Slightly over (acceptable) |
+| DHT Discovery | < 1s | < 5s | ✅ |
 | Encrypted Transport | 0.01s | < 5s | ✅ |
 | Holepunch Flow | 2.05s | < 5s | ✅ |
 | Bootstrap Resilience | 1.51s | < 5s | ✅ |
-| **Total Integration Tests** | **~8.7s** | - | ✅ |
+| **Total Integration Tests** | **environment-dependent** | - | See individual test output |
 
 ## Known Limitations
 
-1. **DHT Discovery Timing**: The two-node discovery test takes 5.1s due to internal DHT timeouts. This is slightly over the 5-second target but acceptable given the protocol's design.
+1. **Public DHT validation**: The deterministic suite deliberately does not contact the public DHT. Public-DHT and NAT validation require the dedicated lab-network acceptance run.
 
 2. **No Real NAT Testing**: Holepunch tests validate the state machine but don't test against real NAT devices (which would require infrastructure).
 
@@ -86,7 +87,7 @@ All integration tests complete within acceptable timeframes:
 The test suite is designed for CI environments:
 - Uses `tokio::test` with multi-threaded runtime
 - Binds to `127.0.0.1:0` for OS-assigned ports (no port conflicts)
-- No external dependencies or network calls (except for DHT bootstrap fallback)
+- No public-DHT or Internet dependency; discovery fixtures bind only loopback and resilience tests use RFC 5737 TEST-NET addresses
 - Fast execution (< 10 seconds total)
 
 ## Running Tests

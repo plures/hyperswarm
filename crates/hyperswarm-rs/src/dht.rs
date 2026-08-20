@@ -550,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn test_announce_with_empty_routing_table() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 
@@ -567,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn test_lookup_with_empty_routing_table() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 
@@ -634,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_bootstrap_calls() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 

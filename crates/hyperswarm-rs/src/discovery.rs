@@ -38,9 +38,9 @@ impl DiscoveryManager {
     pub async fn join(&self, dht: &dht::DhtClient, topic: Topic) -> Result<(), DiscoveryError> {
         self.topics.write().await.insert(topic);
         
-        // Announce our presence on the DHT for this topic
-        // Use port 0 to indicate we're interested but not listening on a specific port
-        dht.announce(topic, 0).await?;
+        // Advertise the actual UDP port that accepts the subsequent direct
+        // connection attempt. A port of zero produces an unusable peer record.
+        dht.announce(topic, dht.local_addr()?.port()).await?;
         
         // Perform initial lookup to find peers
         let peers = dht.lookup(topic).await?;

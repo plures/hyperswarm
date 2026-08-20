@@ -25,10 +25,12 @@ pub struct KrpcMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum KrpcMessageType {
+    #[serde(rename = "q")]
     Query,
+    #[serde(rename = "r")]
     Response,
+    #[serde(rename = "e")]
     Error,
 }
 
@@ -124,6 +126,27 @@ mod tests {
             _ => panic!("Expected Query type"),
         }
         assert!(decoded.q.is_some());
+    }
+
+    #[test]
+    fn test_krpc_query_uses_standard_wire_tag() {
+        let msg = KrpcMessage {
+            t: vec![1, 2],
+            y: KrpcMessageType::Query,
+            q: Some(KrpcQueryKind::Ping),
+            a: Some(KrpcArgs {
+                id: Some(vec![0; 20]),
+                ..Default::default()
+            }),
+            r: None,
+            e: None,
+        };
+
+        let encoded = encode_krpc(&msg).expect("KRPC query should encode");
+        assert!(
+            encoded.windows(6).any(|window| window == b"1:y1:q"),
+            "KRPC queries must use the standard y=q tag, not a serde enum name"
+        );
     }
 
     #[test]
