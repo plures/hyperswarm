@@ -8,7 +8,7 @@ use snow::{Builder, HandshakeState, TransportState};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use zeroize::Zeroizing;
 
 const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
@@ -17,6 +17,8 @@ const MAX_MESSAGE_SIZE: usize = 65535;
 /// Bounded to prevent an adversary from stalling a handshake indefinitely
 /// by continuously sending spoofed packets from unexpected addresses.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+type InitiatorKeyMaterial = (HandshakeState, [u8; 32], Zeroizing<[u8; 32]>);
 
 #[derive(thiserror::Error, Debug)]
 pub enum TransportError {
@@ -30,12 +32,17 @@ pub enum TransportError {
     InvalidMessage,
     #[error("peer authentication failed: remote static key does not match expected key")]
     PeerAuthenticationFailed,
+    #[error("topic handshake payload did not match the expected topic")]
+    TopicMismatch,
+    #[error("connection closed before a complete packet was received")]
+    ConnectionClosed,
 }
 
 /// An encrypted stream wrapper using Noise protocol.
 pub struct EncryptedStream {
     socket: Arc<UdpSocket>,
     remote_addr: SocketAddr,
+    inbound_packets: InboundPackets,
     state: Arc<Mutex<StreamState>>,
     /// The remote peer's static public key, populated after a successful handshake.
     remote_static_key: Option<[u8; 32]>,
@@ -48,8 +55,13 @@ pub struct EncryptedStream {
 }
 
 enum StreamState {
-    Handshaking(HandshakeState),
+    Handshaking(Box<HandshakeState>),
     Established(TransportState),
+}
+
+enum InboundPackets {
+    Socket,
+    Channel(Arc<Mutex<mpsc::Receiver<Bytes>>>),
 }
 
 impl EncryptedStream {
@@ -60,7 +72,30 @@ impl EncryptedStream {
         Ok(Self {
             socket,
             remote_addr,
-            state: Arc::new(Mutex::new(StreamState::Handshaking(handshake))),
+            inbound_packets: InboundPackets::Socket,
+            state: Arc::new(Mutex::new(StreamState::Handshaking(Box::new(handshake)))),
+            remote_static_key: None,
+            local_static_pubkey,
+            local_static_privkey,
+        })
+    }
+
+    /// Create a stream whose packets are supplied by a connection manager.
+    ///
+    /// The manager remains the sole UDP socket reader, preventing one stream
+    /// from consuming a packet intended for a different authenticated peer.
+    pub(crate) async fn new_with_inbound_packets(
+        socket: Arc<UdpSocket>,
+        remote_addr: SocketAddr,
+        inbound_packets: mpsc::Receiver<Bytes>,
+    ) -> Result<Self, TransportError> {
+        let (handshake, local_static_pubkey, local_static_privkey) =
+            Self::generate_keypair_and_initiator()?;
+        Ok(Self {
+            socket,
+            remote_addr,
+            inbound_packets: InboundPackets::Channel(Arc::new(Mutex::new(inbound_packets))),
+            state: Arc::new(Mutex::new(StreamState::Handshaking(Box::new(handshake)))),
             remote_static_key: None,
             local_static_pubkey,
             local_static_privkey,
@@ -69,7 +104,7 @@ impl EncryptedStream {
 
     /// Generate a static keypair, return an initiator handshake state together
     /// with the public and private key bytes.
-    fn generate_keypair_and_initiator() -> Result<(HandshakeState, [u8; 32], Zeroizing<[u8; 32]>), TransportError> {
+    fn generate_keypair_and_initiator() -> Result<InitiatorKeyMaterial, TransportError> {
         let builder = Builder::new(
             NOISE_PARAMS.parse().map_err(|e| TransportError::Noise(format!("{:?}", e)))?,
         );
@@ -147,6 +182,17 @@ impl EncryptedStream {
     /// After a successful handshake the peer's static key is stored and accessible via
     /// [`EncryptedStream::remote_static_key`].
     pub async fn handshake_initiator(&mut self, remote_static_pubkey: Option<[u8; 32]>) -> Result<(), TransportError> {
+        self.handshake_initiator_with_payload(&[], remote_static_pubkey)
+            .await
+    }
+
+    /// Perform a Noise XX initiator handshake and bind an authenticated initial
+    /// payload to the resulting stream.
+    pub async fn handshake_initiator_with_payload(
+        &mut self,
+        initial_payload: &[u8],
+        remote_static_pubkey: Option<[u8; 32]>,
+    ) -> Result<(), TransportError> {
         // Extract the handshake state temporarily
         let handshake = {
             let mut state = self.state.lock().await;
@@ -155,8 +201,11 @@ impl EncryptedStream {
                 StreamState::Handshaking(_) => {
                     // Replace with a placeholder so the lock can be released while
                     // we perform network I/O.
-                    match std::mem::replace(&mut *state, StreamState::Handshaking(self.make_initiator_state()?)) {
-                        StreamState::Handshaking(h) => h,
+                    match std::mem::replace(
+                        &mut *state,
+                        StreamState::Handshaking(Box::new(self.make_initiator_state()?)),
+                    ) {
+                        StreamState::Handshaking(h) => *h,
                         _ => unreachable!(),
                     }
                 }
@@ -168,7 +217,7 @@ impl EncryptedStream {
         // -> e
         let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
         let len = handshake
-            .write_message(&[], &mut buf)
+            .write_message(initial_payload, &mut buf)
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
         
         self.socket.send_to(&buf[..len], self.remote_addr).await?;
@@ -177,17 +226,7 @@ impl EncryptedStream {
         // Apply the same shared deadline as the responder to prevent an adversary
         // from stalling the initiator indefinitely by flooding from wrong addresses.
         let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
-        let recv_len = loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(TransportError::HandshakeIncomplete);
-            }
-            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
-                Ok(Ok(_)) => {} // ignore packets from unexpected sources
-                _ => return Err(TransportError::HandshakeIncomplete),
-            }
-        };
+        let recv_len = self.recv_packet_before(&mut buf, deadline).await?;
         
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
@@ -230,6 +269,15 @@ impl EncryptedStream {
     /// After a successful handshake the initiator's static public key is stored
     /// and accessible via [`EncryptedStream::remote_static_key`].
     pub async fn handshake_responder(&mut self) -> Result<(), TransportError> {
+        self.handshake_responder_with_expected_payload(&[]).await
+    }
+
+    /// Perform a Noise XX responder handshake and require an exact initial
+    /// payload before exposing the encrypted stream.
+    pub async fn handshake_responder_with_expected_payload(
+        &mut self,
+        expected_initial_payload: &[u8],
+    ) -> Result<(), TransportError> {
         // Build a responder state reusing the stored static keypair so that
         // local_static_pubkey() remains consistent regardless of which role
         // this stream takes.
@@ -240,20 +288,14 @@ impl EncryptedStream {
         // stall the handshake indefinitely (DoS mitigation).
         let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
         let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
-        let recv_len = loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(TransportError::HandshakeIncomplete);
-            }
-            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
-                Ok(Ok(_)) => {} // ignore packets from unexpected sources
-                _ => return Err(TransportError::HandshakeIncomplete),
-            }
-        };
-        let _ = handshake
-            .read_message(&buf[..recv_len], &mut [])
+        let recv_len = self.recv_packet_before(&mut buf, deadline).await?;
+        let mut initial_payload = vec![0u8; MAX_MESSAGE_SIZE];
+        let initial_payload_len = handshake
+            .read_message(&buf[..recv_len], &mut initial_payload)
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
+        if &initial_payload[..initial_payload_len] != expected_initial_payload {
+            return Err(TransportError::TopicMismatch);
+        }
 
         // -> e, ee, s, es
         let len = handshake
@@ -263,17 +305,7 @@ impl EncryptedStream {
         self.socket.send_to(&buf[..len], self.remote_addr).await?;
 
         // <- s, se
-        let recv_len = loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(TransportError::HandshakeIncomplete);
-            }
-            match tokio::time::timeout(remaining, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, addr))) if addr == self.remote_addr => break len,
-                Ok(Ok(_)) => {} // ignore packets from unexpected sources
-                _ => return Err(TransportError::HandshakeIncomplete),
-            }
-        };
+        let recv_len = self.recv_packet_before(&mut buf, deadline).await?;
         let _ = handshake
             .read_message(&buf[..recv_len], &mut [])
             .map_err(|e| TransportError::Noise(format!("{:?}", e)))?;
@@ -326,14 +358,7 @@ impl EncryptedStream {
         match &mut *state {
             StreamState::Established(transport) => {
                 let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
-                // Only accept packets from the expected remote_addr
-                let len = loop {
-                    let (len, addr) = self.socket.recv_from(&mut buf).await?;
-                    if addr == self.remote_addr {
-                        break len;
-                    }
-                    // Ignore packets from unexpected peers and wait for the correct one
-                };
+                let len = self.recv_packet(&mut buf).await?;
                 
                 let mut plaintext = vec![0u8; MAX_MESSAGE_SIZE];
                 let plaintext_len = transport
@@ -344,6 +369,44 @@ impl EncryptedStream {
             }
             StreamState::Handshaking(_) => Err(TransportError::HandshakeIncomplete),
         }
+    }
+
+    async fn recv_packet(&self, buf: &mut [u8]) -> Result<usize, TransportError> {
+        match &self.inbound_packets {
+            InboundPackets::Socket => loop {
+                let (len, addr) = self.socket.recv_from(buf).await?;
+                if addr == self.remote_addr {
+                    return Ok(len);
+                }
+            },
+            InboundPackets::Channel(receiver) => {
+                let packet = receiver
+                    .lock()
+                    .await
+                    .recv()
+                    .await
+                    .ok_or(TransportError::ConnectionClosed)?;
+                if packet.len() > buf.len() {
+                    return Err(TransportError::InvalidMessage);
+                }
+                buf[..packet.len()].copy_from_slice(&packet);
+                Ok(packet.len())
+            }
+        }
+    }
+
+    async fn recv_packet_before(
+        &self,
+        buf: &mut [u8],
+        deadline: tokio::time::Instant,
+    ) -> Result<usize, TransportError> {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(TransportError::HandshakeIncomplete);
+        }
+        tokio::time::timeout(remaining, self.recv_packet(buf))
+            .await
+            .map_err(|_| TransportError::HandshakeIncomplete)?
     }
 }
 

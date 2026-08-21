@@ -5,6 +5,7 @@
 You are working in the **plures** organization. Before making changes, understand our standards and architecture.
 
 ### Source of Truth
+
 - **Development guide:** https://github.com/plures/development-guide
   - `standards/` — commit conventions, CI/CD, PR workflow, repo setup, code style
   - `practices/` — copilot delegation, merge sweeps, local-first development
@@ -14,22 +15,26 @@ You are working in the **plures** organization. Before making changes, understan
 ### Architecture Principles (NON-NEGOTIABLE)
 
 **Praxis-First Development** — decisions go through Praxis rules, not bare if/else:
+
 - Decision ledger (ADRs) with evidence tables — tested facts, unknowns marked
 - Expectations as constraints — severity = error, check functions enforce correctness
 - Model before code — expand types, wire fetcher, then write expectations
 - Never ship warnings — if it's wrong, it's an error
 
 **Structured Observability** — tracing macros, not println/dbg:
+
 - Every I/O boundary logged with structured spans
 - Use `tracing::instrument` (Rust) or OpenTelemetry (TypeScript)
 - NO bare `println!`, `dbg!`, or `console.log` in production code
 
 **Reactive Architecture** — procedures over code, events over polling:
+
 - PluresDB procedures for orchestration
 - Event-driven workflows, not cron jobs
 - Scheduled tasks are a reliability anti-pattern
 
 **Design-Dojo Mandate** — ALL UI must use design-dojo components:
+
 - No raw HTML elements (`<button>`, `<aside>`, `<nav>`) in application code
 - Every UI component must come from `@plures/design-dojo`
 - If a component doesn't exist in design-dojo, build it there first, then import
@@ -37,6 +42,7 @@ You are working in the **plures** organization. Before making changes, understan
 - Schema-driven: components generated from praxis rules and PluresDB schemas
 
 **Praxis-Composed Applications** — apps MUST be wholly composed of praxis primitives:
+
 - Every decision = a Rule with a Contract
 - Every state change = an Event processed by the Engine
 - Every UI component = design-dojo, generated from schemas
@@ -55,21 +61,22 @@ You are working in the **plures** organization. Before making changes, understan
 
 ### Plures Stack Reference
 
-| Component | Purpose | Language | Key Features |
-|-----------|---------|----------|--------------|
-| **pluresdb** | Distributed database | Rust | CRDT store, HNSW vectors, reactive procedures, P2P sync |
-| **praxis** | Business logic engine | Rust/TypeScript | Expectations, ADRs, decision ledger, event lifecycle |
-| **plureslm** | Long-term memory | TypeScript | Native embeddings (BGE-small), MCP server, graph traversal |
-| **chronos** | State chronicle | TypeScript | Causal diffs, temporal queries, PluresDB writer |
-| **unum** | Reactive bindings | TypeScript | Svelte 5 bindings for PluresDB |
-| **design-dojo** | UI component library | Svelte 5 | Sidebar, StatusBar, Button, Tabs, ActivityBar, TitleBar |
-| **pares-agens** | Agent runtime | Rust | Telegram, cerebellum, delegation, PluresDB memory |
-| **pares-radix** | Application shell | TypeScript | Plugin loader, inference engine, UX contracts |
-| **pares-modulus** | Plugin registry | TypeScript | Gated submissions, manifest validation, security scan |
+| Component         | Purpose               | Language        | Key Features                                               |
+| ----------------- | --------------------- | --------------- | ---------------------------------------------------------- |
+| **pluresdb**      | Distributed database  | Rust            | CRDT store, HNSW vectors, reactive procedures, P2P sync    |
+| **praxis**        | Business logic engine | Rust/TypeScript | Expectations, ADRs, decision ledger, event lifecycle       |
+| **plureslm**      | Long-term memory      | TypeScript      | Native embeddings (BGE-small), MCP server, graph traversal |
+| **chronos**       | State chronicle       | TypeScript      | Causal diffs, temporal queries, PluresDB writer            |
+| **unum**          | Reactive bindings     | TypeScript      | Svelte 5 bindings for PluresDB                             |
+| **design-dojo**   | UI component library  | Svelte 5        | Sidebar, StatusBar, Button, Tabs, ActivityBar, TitleBar    |
+| **pares-agens**   | Agent runtime         | Rust            | Telegram, cerebellum, delegation, PluresDB memory          |
+| **pares-radix**   | Application shell     | TypeScript      | Plugin loader, inference engine, UX contracts              |
+| **pares-modulus** | Plugin registry       | TypeScript      | Gated submissions, manifest validation, security scan      |
 
 ### Commit Standards (MANDATORY)
 
 **Conventional Commits** — all commit messages MUST follow:
+
 ```
 <type>[optional scope]: <description>
 
@@ -122,6 +129,7 @@ Version bumps are automatic from conventional commits. Milestone-driven releases
 ### Copilot Issue Requirements (ADR-0004)
 
 For Copilot SWE agent to process issues, BOTH are required:
+
 - **Label**: At least one label (e.g., `enhancement`, `bug`)
 - **Type**: Issue type set (Feature, Bug, Task)
 
@@ -130,6 +138,7 @@ Without both, Copilot **silently cancels**. No error, no notification — just n
 ### What NOT to Do
 
 **Code Quality:**
+
 - ❌ NO `#[allow(...)]` or `#![allow(...)]` suppressions — fix the underlying issue
 - ❌ NO `// eslint-disable` — fix the lint violation
 - ❌ NO bare `println!`, `dbg!`, or `console.log` in production code — use structured tracing
@@ -137,6 +146,7 @@ Without both, Copilot **silently cancels**. No error, no notification — just n
 - ❌ NO raw HTML elements in app code — use design-dojo components
 
 **Process:**
+
 - ❌ NO sub-PRs that depend on other PRs — merge parent first
 - ❌ NO touching files outside the requested scope
 - ❌ NO skipping tests or adding `#[ignore]`/`skip` to make CI pass
@@ -144,12 +154,14 @@ Without both, Copilot **silently cancels**. No error, no notification — just n
 - ❌ NO nudging Copilot with comments — close and recreate if stalled
 
 **Architecture:**
+
 - ❌ NO cron jobs for orchestration — use reactive procedures
 - ❌ NO polling loops — subscribe to events
 - ❌ NO bare if/else business logic — use Praxis expectations
 - ❌ NO local UI components — contribute to design-dojo first
 
 ### When in Doubt
+
 1. Check the development guide
 2. Look for existing ADRs in `.praxis/decisions/`
 3. Ask before breaking established patterns

@@ -550,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn test_announce_with_empty_routing_table() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 
@@ -567,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn test_lookup_with_empty_routing_table() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 
@@ -600,7 +600,7 @@ mod tests {
     #[tokio::test]
     async fn test_compact_peer_parsing_ipv4() {
         // Test IPv4 compact peer info parsing
-        let ipv4_peer = vec![127, 0, 0, 1, 0x1F, 0x90]; // 127.0.0.1:8080
+        let ipv4_peer = [127, 0, 0, 1, 0x1F, 0x90]; // 127.0.0.1:8080
         assert_eq!(ipv4_peer.len(), COMPACT_PEER_INFO_SIZE_IPV4);
         
         // Verify parsing logic
@@ -634,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_bootstrap_calls() {
         let config = DhtConfig {
-            bootstrap: vec![],
+            bootstrap: vec!["192.0.2.1:6881".to_string()],
             bind_port: 0,
         };
 

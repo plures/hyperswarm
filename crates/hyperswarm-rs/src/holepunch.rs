@@ -16,7 +16,10 @@
 //! key (derived from the topic or exchanged via the DHT relay).  Packets that
 //! fail MAC verification are silently ignored.
 
-use blake2::{Blake2sMac256, digest::{Mac, KeyInit}};
+use blake2::{
+    digest::{KeyInit, Mac},
+    Blake2sMac256,
+};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -28,7 +31,7 @@ pub struct Candidate {
     pub kind: CandidateKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CandidateKind {
     /// Private LAN address.
     Lan,
@@ -57,6 +60,23 @@ const PUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 const PUNCH_MAC_SIZE: usize = 32;
 /// How long to wait between punch retransmissions while waiting for a response.
 const PUNCH_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Return candidates in direct-path preference order.
+///
+/// A LAN candidate is already a concrete, same-subnet route, so it must be
+/// attempted before a WAN or relay candidate.  Discovery still supplies those
+/// other candidates as fallbacks when a direct path cannot be established.
+/// Keeping the ordering here makes the transport deterministic and avoids a
+/// stale ICMP error from a dead WAN UDP endpoint poisoning the receive path
+/// for a subsequently attempted LAN endpoint on Windows.
+fn preferred_candidates(mut candidates: Vec<Candidate>) -> Vec<Candidate> {
+    candidates.sort_by_key(|candidate| match &candidate.kind {
+        CandidateKind::Lan => 0_u8,
+        CandidateKind::Wan => 1_u8,
+        CandidateKind::Relay => 2_u8,
+    });
+    candidates
+}
 
 pub struct HolepunchSession {
     socket: Arc<UdpSocket>,
@@ -118,17 +138,31 @@ impl HolepunchSession {
     }
 
     /// Initiate a holepunch attempt to a remote peer.
-    pub async fn initiate(&mut self, remote_candidates: Vec<Candidate>) -> Result<SocketAddr, HolepunchError> {
+    pub async fn initiate(
+        &mut self,
+        remote_candidates: Vec<Candidate>,
+    ) -> Result<SocketAddr, HolepunchError> {
         if remote_candidates.is_empty() {
             return Err(HolepunchError::NoViableCandidates);
         }
 
-        // Probe all candidates to create NAT bindings
-        self.probe(&remote_candidates).await?;
+        let remote_candidates = preferred_candidates(remote_candidates);
 
-        // Try to establish connection with each candidate
+        // Probe and attempt one candidate at a time in direct-path preference
+        // order. Probing a dead fallback endpoint before a viable LAN endpoint
+        // can queue an ICMP reset on Windows; that stale error may otherwise
+        // poison the receive operation for the direct attempt.
         for candidate in &remote_candidates {
-            // Send punch message
+            if let Err(error) = self.probe(std::slice::from_ref(candidate)).await {
+                tracing::debug!(
+                    candidate = %candidate.addr,
+                    kind = ?candidate.kind,
+                    error = %error,
+                    "candidate probe failed; trying the next route"
+                );
+                continue;
+            }
+
             if let Ok(established_addr) = self.punch_to(candidate.addr).await {
                 return Ok(established_addr);
             }
@@ -138,7 +172,10 @@ impl HolepunchSession {
     }
 
     /// Respond to a remote initiation.
-    pub async fn respond(&mut self, remote_candidates: Vec<Candidate>) -> Result<SocketAddr, HolepunchError> {
+    pub async fn respond(
+        &mut self,
+        remote_candidates: Vec<Candidate>,
+    ) -> Result<SocketAddr, HolepunchError> {
         if remote_candidates.is_empty() {
             return Err(HolepunchError::NoViableCandidates);
         }
@@ -166,7 +203,11 @@ impl HolepunchSession {
                     success_count += 1;
                 }
                 Err(e) => {
-                    tracing::debug!("Probe attempt unsuccessful for candidate {}: {}", candidate.addr, e);
+                    tracing::debug!(
+                        "Probe attempt unsuccessful for candidate {}: {}",
+                        candidate.addr,
+                        e
+                    );
                     last_error = Some(e);
                 }
             }
@@ -243,10 +284,10 @@ impl HolepunchSession {
     async fn recv_and_respond(&self) -> Result<SocketAddr, HolepunchError> {
         let punch_packet = self.build_punch_packet();
         let mut buf = vec![0u8; PUNCH_MESSAGE.len() + PUNCH_MAC_SIZE + 16];
-        
+
         loop {
             let (len, from_addr) = self.socket.recv_from(&mut buf).await?;
-            
+
             if self.verify_punch_packet(&buf[..len]) {
                 // Respond with our own authenticated punch message.
                 self.socket.send_to(&punch_packet, from_addr).await?;
@@ -278,7 +319,9 @@ mod tests {
     #[tokio::test]
     async fn test_probe_candidates() {
         let bind_addr = "127.0.0.1:0".parse().unwrap();
-        let mut session = HolepunchSession::new(bind_addr, TEST_SESSION_KEY).await.unwrap();
+        let mut session = HolepunchSession::new(bind_addr, TEST_SESSION_KEY)
+            .await
+            .unwrap();
 
         let candidates = vec![
             Candidate {
@@ -313,6 +356,28 @@ mod tests {
         assert_ne!(addr2.port(), 0);
     }
 
+    #[test]
+    fn direct_lan_candidates_are_preferred_before_fallbacks() {
+        let candidates = preferred_candidates(vec![
+            Candidate {
+                addr: "127.0.0.1:9003".parse().unwrap(),
+                kind: CandidateKind::Relay,
+            },
+            Candidate {
+                addr: "127.0.0.1:9002".parse().unwrap(),
+                kind: CandidateKind::Wan,
+            },
+            Candidate {
+                addr: "127.0.0.1:9001".parse().unwrap(),
+                kind: CandidateKind::Lan,
+            },
+        ]);
+
+        assert_eq!(candidates[0].kind, CandidateKind::Lan);
+        assert_eq!(candidates[1].kind, CandidateKind::Wan);
+        assert_eq!(candidates[2].kind, CandidateKind::Relay);
+    }
+
     #[tokio::test]
     async fn test_punch_mac_valid() {
         let session = HolepunchSession::new("127.0.0.1:0".parse().unwrap(), TEST_SESSION_KEY)
@@ -320,7 +385,10 @@ mod tests {
             .unwrap();
 
         let packet = session.build_punch_packet();
-        assert!(session.verify_punch_packet(&packet), "valid packet should pass MAC check");
+        assert!(
+            session.verify_punch_packet(&packet),
+            "valid packet should pass MAC check"
+        );
     }
 
     #[tokio::test]

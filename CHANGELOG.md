@@ -26,4 +26,3 @@
 - feat: scaffold Rust implementation of Hyperswarm for PluresDB sync (3000304)
 - Add missing CI (#205) (1bbce1f)
 - Add linter and update CI (#204) (801ae77)
-

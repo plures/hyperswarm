@@ -7,9 +7,11 @@ Rust implementation of **Hyperswarm** (P2P discovery via DHT + NAT holepunching)
 
 ## Status
 
-This crate is **feature-complete** for demonstration and development purposes. Core P2P functionality is implemented and tested.
+This crate has a deterministic local DHT and managed-connection foundation.
+It is not yet validated as a public-DHT or NAT-traversal implementation.
 
 ### Implemented
+
 - ✅ DHT client with KRPC protocol support (ping, find_node, get_peers, announce_peer)
 - ✅ Bencode encoding/decoding for KRPC messages
 - ✅ Basic routing table with node management
@@ -17,6 +19,8 @@ This crate is **feature-complete** for demonstration and development purposes. C
 - ✅ Topic-based peer announcement and lookup
 - ✅ UDP holepunching with probe/punch protocol
 - ✅ Noise XX protocol encryption for secure transport
+- ✅ Bounded managed UDP connection lifecycle with packet demultiplexing
+- ✅ Topic-bound authenticated stream admission through the public API
 - ✅ Address verification to prevent spoofing attacks
 - ✅ IPv6 support in DHT compact peer parsing (BEP 5)
 - ✅ Integration test coverage
@@ -26,9 +30,11 @@ This crate is **feature-complete** for demonstration and development purposes. C
 - ✅ Retry logic in holepunch punch phase (retransmit every 200 ms)
 
 ### TODO (Production Readiness)
+
 - ⏳ Full k-bucket routing table optimization
 - ⏳ Iterative DHT traversal for wider peer discovery
-- ⏳ Connection multiplexing
+- ⏳ Public-DHT and multi-machine NAT traversal validation
+- ⏳ Long-lived node identities and discovery-to-connection policy integration
 - ⏳ Interop testing with JS Hyperswarm
 - ⏳ Security audit and penetration testing
 
@@ -45,10 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bootstrap: vec!["router.bittorrent.com:6881".to_string()],
         bind_port: 0, // Let OS choose a port
     };
-    
+
     let client = DhtClient::new(config).await?;
     client.bootstrap().await?;
-    
+
     Ok(())
 }
 ```
@@ -61,22 +67,48 @@ use hyperswarm::{Hyperswarm, SwarmConfig, Topic};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let swarm = Hyperswarm::new(SwarmConfig::default()).await?;
-    
+
     let topic = Topic::from_key(b"my-app-topic");
     swarm.join(topic).await?;  // Announces and discovers peers
-    
+
     Ok(())
 }
 ```
 
+### Managed Direct Connection
+
+Discovery returns untrusted addresses. The caller selects a candidate and the
+manager binds the selected topic into the authenticated Noise handshake:
+
+```rust,no_run
+use hyperswarm::{dht::PeerAddress, Hyperswarm, Topic};
+
+async fn connect_selected_peer(
+    swarm: &Hyperswarm,
+    topic: Topic,
+    peer: PeerAddress,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let connection = swarm.connect(topic, peer, None).await?;
+    // `connection` is a managed encrypted stream; dropping it releases its slot.
+    Ok(())
+}
+```
+
+Pass an expected Noise static key instead of `None` when the caller has one
+for this connection. Persistent node identities remain a separate production
+readiness item. Peer selection, retries, and re-announcement remain
+caller-owned policy rather than hidden transport behavior.
+
 ### Examples
 
 See the `examples/` directory for complete demonstrations:
+
 - `dht_bootstrap.rs` — DHT client bootstrap
 - `topic_announce.rs` — Topic announcement and peer lookup
 - `p2p_connection.rs` — Full P2P connection flow demonstration
 
 Run examples with:
+
 ```bash
 cargo run --example dht_bootstrap
 cargo run --example topic_announce
@@ -91,9 +123,14 @@ cargo run --example p2p_connection
   - ✅ lookup — Find peers for a topic
   - ✅ ping / find_node / get_peers / announce_peer queries
 
-- **`discovery`** — Orchestrates per-topic lifecycle and connection attempts
+- **`discovery`** — Orchestrates per-topic announce/lookup lifecycle
   - ✅ join/leave topic management
   - ✅ Integration with DHT for announce/lookup
+
+- **`connection`** — Bounded direct-stream lifecycle
+  - ✅ Sole UDP packet receiver and per-peer demultiplexing
+  - ✅ Topic-bound Noise handshake admission
+  - ✅ Explicit caller-selected connect/accept APIs
 
 - **`holepunch`** — UDP holepunch coordination
   - ✅ Session management
@@ -128,16 +165,16 @@ use hyperswarm::{Hyperswarm, SwarmConfig, Topic};
 async fn setup_pluresdb_sync() -> Result<(), Box<dyn std::error::Error>> {
     // Create swarm instance
     let swarm = Hyperswarm::new(SwarmConfig::default()).await?;
-    
+
     // Derive topic from PluresDB collection key
     let collection_key = b"pluresdb-collection-abc123";
     let topic = Topic::from_key(collection_key);
-    
+
     // Join the swarm for this collection
     swarm.join(topic).await?;
-    
+
     // ... establish connections and sync data ...
-    
+
     Ok(())
 }
 ```
@@ -152,11 +189,13 @@ async fn setup_pluresdb_sync() -> Result<(), Box<dyn std::error::Error>> {
 ## Testing
 
 Run the test suite:
+
 ```bash
 cargo test
 ```
 
 Build the library:
+
 ```bash
 cargo build
 ```
