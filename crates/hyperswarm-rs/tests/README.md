@@ -12,7 +12,7 @@ The integration tests validate end-to-end functionality across four main areas:
 
 - `announce_then_lookup_uses_real_local_krpc_bootstrap`: Validates bootstrap, token-bearing announce, and lookup over real localhost UDP with no manual routing-table mutation
 - `discovery_announces_the_bound_udp_port`: Validates the high-level discovery manager advertises a usable bound UDP port, never port zero
-- `test_announce_and_lookup_same_client`: Validates graceful behavior when an explicitly configured TEST-NET bootstrap cannot respond
+- `tests/dht_discovery.rs::test_announce_and_lookup_same_client`: Validates graceful behavior when an explicitly configured TEST-NET bootstrap cannot respond
 
 **Coverage:**
 
