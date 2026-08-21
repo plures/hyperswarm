@@ -1,0 +1,32 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/hyperswarm-rs/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/hyperswarm-rs/**'
+      - '.github/workflows/rust.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate hyperswarm-rs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/hyperswarm-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo test --locked
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --release --locked
