@@ -9,12 +9,14 @@ The integration tests validate end-to-end functionality across four main areas:
 ### 1. DHT Discovery (`tests/local_krpc_bootstrap.rs`)
 
 **Tests:**
+
 - `announce_then_lookup_uses_real_local_krpc_bootstrap`: Validates bootstrap, token-bearing announce, and lookup over real localhost UDP with no manual routing-table mutation
 - `discovery_announces_the_bound_udp_port`: Validates the high-level discovery manager advertises a usable bound UDP port, never port zero
 - `test_announce_and_lookup_same_client`: Validates graceful behavior when an explicitly configured TEST-NET bootstrap cannot respond
 
 **Coverage:**
-- ✅ Topic-based peer discovery  
+
+- ✅ Topic-based peer discovery
 - ✅ Announce and lookup operations
 - ✅ Routing-table population through the production bootstrap path
 - ✅ Local UDP bootstrap, announce, and lookup with exact peer-address assertion
@@ -22,10 +24,12 @@ The integration tests validate end-to-end functionality across four main areas:
 ### 2. Encrypted Transport (`tests/encrypted_transport.rs`) - 0.01s
 
 **Tests:**
+
 - `test_encrypted_stream_round_trip`: Validates bidirectional encrypted communication
 - `test_encrypted_stream_multiple_messages`: Validates sequential message integrity
 
 **Coverage:**
+
 - ✅ Noise XX handshake (initiator and responder roles)
 - ✅ Encrypted send/recv in both directions
 - ✅ Message integrity verification
@@ -34,12 +38,14 @@ The integration tests validate end-to-end functionality across four main areas:
 ### 3. Holepunch Flow (`tests/holepunch_flow.rs`) - 2.05s
 
 **Tests:**
+
 - `test_holepunch_probe_phase`: Validates probe message sending
 - `test_holepunch_with_multiple_candidates`: Validates candidate selection
 - `test_holepunch_timeout_with_no_candidates`: Validates error handling
 - `test_holepunch_initiate_and_respond`: Validates full initiate/respond flow
 
 **Coverage:**
+
 - ✅ Probe phase (NAT binding creation)
 - ✅ Multiple candidate handling
 - ✅ Timeout and error conditions
@@ -48,6 +54,7 @@ The integration tests validate end-to-end functionality across four main areas:
 ### 4. Bootstrap Resilience (`tests/bootstrap_resilience.rs`) - 1.51s
 
 **Tests:**
+
 - `test_bootstrap_with_unreachable_nodes`: Validates timeout behavior
 - `test_announce_without_bootstrap`: Validates graceful degradation
 - `test_lookup_without_bootstrap`: Validates empty result handling
@@ -56,6 +63,7 @@ The integration tests validate end-to-end functionality across four main areas:
 - `test_client_shutdown_after_failed_bootstrap`: Validates cleanup
 
 **Coverage:**
+
 - ✅ Unreachable bootstrap nodes
 - ✅ Operations with failed bootstrap
 - ✅ Concurrent bootstrap calls
@@ -66,13 +74,13 @@ The integration tests validate end-to-end functionality across four main areas:
 
 All integration tests complete within acceptable timeframes:
 
-| Test Suite | Duration | Target | Status |
-|------------|----------|--------|--------|
-| DHT Discovery | < 1s | < 5s | ✅ |
-| Encrypted Transport | 0.01s | < 5s | ✅ |
-| Holepunch Flow | 2.05s | < 5s | ✅ |
-| Bootstrap Resilience | 1.51s | < 5s | ✅ |
-| **Total Integration Tests** | **environment-dependent** | - | See individual test output |
+| Test Suite                  | Duration                  | Target | Status                     |
+| --------------------------- | ------------------------- | ------ | -------------------------- |
+| DHT Discovery               | < 1s                      | < 5s   | ✅                         |
+| Encrypted Transport         | 0.01s                     | < 5s   | ✅                         |
+| Holepunch Flow              | 2.05s                     | < 5s   | ✅                         |
+| Bootstrap Resilience        | 1.51s                     | < 5s   | ✅                         |
+| **Total Integration Tests** | **environment-dependent** | -      | See individual test output |
 
 ## Known Limitations
 
@@ -85,6 +93,7 @@ All integration tests complete within acceptable timeframes:
 ## CI Compatibility
 
 The test suite is designed for CI environments:
+
 - Uses `tokio::test` with multi-threaded runtime
 - Binds to `127.0.0.1:0` for OS-assigned ports (no port conflicts)
 - No public-DHT or Internet dependency; discovery fixtures bind only loopback and resilience tests use RFC 5737 TEST-NET addresses
@@ -115,6 +124,7 @@ cargo test -- --ignored --nocapture
 ## Test Helper Module
 
 `tests/common/mod.rs` provides shared utilities for integration tests:
+
 - `create_test_dht_client()`: Create DHT client with no bootstrap
 - `create_test_socket()`: Create bound UDP socket
 - `wait_for_setup()`: Small delay for async coordination

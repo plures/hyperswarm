@@ -10,6 +10,7 @@ Rust implementation of **Hyperswarm** (P2P discovery via DHT + NAT holepunching)
 This crate is **feature-complete** for demonstration and development purposes. Core P2P functionality is implemented and tested.
 
 ### Implemented
+
 - ✅ DHT client with KRPC protocol support (ping, find_node, get_peers, announce_peer)
 - ✅ Bencode encoding/decoding for KRPC messages
 - ✅ Basic routing table with node management
@@ -26,6 +27,7 @@ This crate is **feature-complete** for demonstration and development purposes. C
 - ✅ Retry logic in holepunch punch phase (retransmit every 200 ms)
 
 ### TODO (Production Readiness)
+
 - ⏳ Full k-bucket routing table optimization
 - ⏳ Iterative DHT traversal for wider peer discovery
 - ⏳ Connection multiplexing
@@ -45,10 +47,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bootstrap: vec!["router.bittorrent.com:6881".to_string()],
         bind_port: 0, // Let OS choose a port
     };
-    
+
     let client = DhtClient::new(config).await?;
     client.bootstrap().await?;
-    
+
     Ok(())
 }
 ```
@@ -61,10 +63,10 @@ use hyperswarm::{Hyperswarm, SwarmConfig, Topic};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let swarm = Hyperswarm::new(SwarmConfig::default()).await?;
-    
+
     let topic = Topic::from_key(b"my-app-topic");
     swarm.join(topic).await?;  // Announces and discovers peers
-    
+
     Ok(())
 }
 ```
@@ -72,11 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Examples
 
 See the `examples/` directory for complete demonstrations:
+
 - `dht_bootstrap.rs` — DHT client bootstrap
 - `topic_announce.rs` — Topic announcement and peer lookup
 - `p2p_connection.rs` — Full P2P connection flow demonstration
 
 Run examples with:
+
 ```bash
 cargo run --example dht_bootstrap
 cargo run --example topic_announce
@@ -128,16 +132,16 @@ use hyperswarm::{Hyperswarm, SwarmConfig, Topic};
 async fn setup_pluresdb_sync() -> Result<(), Box<dyn std::error::Error>> {
     // Create swarm instance
     let swarm = Hyperswarm::new(SwarmConfig::default()).await?;
-    
+
     // Derive topic from PluresDB collection key
     let collection_key = b"pluresdb-collection-abc123";
     let topic = Topic::from_key(collection_key);
-    
+
     // Join the swarm for this collection
     swarm.join(topic).await?;
-    
+
     // ... establish connections and sync data ...
-    
+
     Ok(())
 }
 ```
@@ -152,11 +156,13 @@ async fn setup_pluresdb_sync() -> Result<(), Box<dyn std::error::Error>> {
 ## Testing
 
 Run the test suite:
+
 ```bash
 cargo test
 ```
 
 Build the library:
+
 ```bash
 cargo build
 ```
