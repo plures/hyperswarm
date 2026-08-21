@@ -94,8 +94,9 @@ async fn connect_selected_peer(
 }
 ```
 
-Pass the expected Noise static key instead of `None` when the caller has a
-known peer identity. Peer selection, retries, and re-announcement remain
+Pass an expected Noise static key instead of `None` when the caller has one
+for this connection. Persistent node identities remain a separate production
+readiness item. Peer selection, retries, and re-announcement remain
 caller-owned policy rather than hidden transport behavior.
 
 ### Examples
