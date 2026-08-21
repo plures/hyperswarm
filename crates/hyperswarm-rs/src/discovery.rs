@@ -1,18 +1,16 @@
 //! Peer discovery coordinator scaffold.
 //!
-//! Coordinates the announce/lookup lifecycle across multiple topics and
-//! triggers connection establishment (holepunch + encrypted transport).
+//! Coordinates the announce/lookup lifecycle across multiple topics.
+//!
+//! Discovery only publishes and returns peer addresses.  Selecting peers and
+//! establishing connections are explicit caller-owned operations through the
+//! connection manager, rather than hidden policy in this layer.
 
 use std::collections::HashSet;
 
 use tokio::sync::RwLock;
 
 use crate::{dht, Topic};
-
-#[derive(Clone, Debug)]
-pub struct DiscoveryConfig {
-    pub max_peers: usize,
-}
 
 #[derive(thiserror::Error, Debug)]
 pub enum DiscoveryError {
@@ -23,33 +21,35 @@ pub enum DiscoveryError {
 }
 
 pub struct DiscoveryManager {
-    config: DiscoveryConfig,
     topics: RwLock<HashSet<Topic>>,
 }
 
 impl DiscoveryManager {
-    pub fn new(config: DiscoveryConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
             topics: RwLock::new(HashSet::new()),
         }
     }
 
-    pub async fn join(&self, dht: &dht::DhtClient, topic: Topic) -> Result<(), DiscoveryError> {
+    pub async fn join(
+        &self,
+        dht: &dht::DhtClient,
+        topic: Topic,
+        advertised_port: u16,
+    ) -> Result<(), DiscoveryError> {
         self.topics.write().await.insert(topic);
-        
+
         // Advertise the actual UDP port that accepts the subsequent direct
         // connection attempt. A port of zero produces an unusable peer record.
-        dht.announce(topic, dht.local_addr()?.port()).await?;
-        
+        dht.announce(topic, advertised_port).await?;
+
         // Perform initial lookup to find peers
         let peers = dht.lookup(topic).await?;
-        
+
         tracing::debug!("Joined topic with {} peers found", peers.len());
-        
-        // TODO: periodically re-announce and lookup; connect to peers.
-        let _ = self.config.max_peers;
-        
+
+        // Re-announcement scheduling and peer-selection policy are owned by
+        // the caller's orchestration layer, not this discovery effect.
         Ok(())
     }
 
@@ -57,5 +57,11 @@ impl DiscoveryManager {
         self.topics.write().await.remove(&topic);
         // TODO: stop tasks for this topic.
         Ok(())
+    }
+}
+
+impl Default for DiscoveryManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
