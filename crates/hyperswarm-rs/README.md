@@ -186,6 +186,41 @@ async fn setup_pluresdb_sync() -> Result<(), Box<dyn std::error::Error>> {
 - Uses `snow` crate for Noise protocol implementation
 - Uses `tokio` for async I/O
 
+### Retained two-process acceptance lab
+
+`managed_connection_lab` is the release-adjacent acceptance harness for the
+managed UDP connection path. It deliberately rejects loopback peers and
+retains one JSON receipt per process. The harness proves direct encrypted
+delivery, reconnect, and topic refusal across two processes; it does **not**
+claim public-DHT discovery, NAT traversal, or a persistent node identity.
+
+Build the same commit on both hosts, then run the server on a LAN-reachable
+address:
+
+```powershell
+cargo build --release --example managed_connection_lab
+target\release\examples\managed_connection_lab.exe --role server --port 42042 --topic "lab-shared-topic" --evidence C:\qa-evidence\hyperswarm-server.json
+```
+
+On the second host, use the server's non-loopback LAN address:
+
+```powershell
+target\release\examples\managed_connection_lab.exe --role client --peer 10.0.0.42:42042 --topic "lab-shared-topic" --evidence C:\qa-evidence\hyperswarm-client.json
+```
+
+Both terminals must report `LAB_RESULT passed`; retain their output and the
+two receipts with the release evidence. The client starts no bootstrap/DHT
+fixture, so this remains a focused direct-transport test suitable for a lab
+network.
+
+### Upstream tracking
+
+Do not automatically rebase this crate on an upstream wrapper release.
+Track HyperDHT as the protocol and interoperability reference, and review it
+on a regular cadence before targeted updates. Track Iroh and rust-libp2p as
+architectural alternatives, not drop-in dependencies: replacing the transport
+requires an explicit compatibility and migration proposal.
+
 ## Testing
 
 Run the test suite:
