@@ -120,24 +120,24 @@ async fn run_client(args: &LabArgs) -> Result<Vec<&'static str>, String> {
         return Err("client --peer must be a non-loopback, non-unspecified address".to_string());
     }
     let topic = Topic::from_key(args.topic.as_bytes());
-    let swarm = start_swarm(0).await?;
     let peer = PeerAddress {
         addr: peer,
         node_id: None,
     };
     let mut steps = Vec::new();
 
-    send_payload(&swarm, topic, peer.clone(), FIRST_PAYLOAD).await?;
+    send_payload(topic, peer.clone(), FIRST_PAYLOAD).await?;
     println!("LAB_STEP client=first_delivery");
     steps.push("first_delivery");
 
-    send_payload(&swarm, topic, peer.clone(), RECONNECT_PAYLOAD).await?;
+    send_payload(topic, peer.clone(), RECONNECT_PAYLOAD).await?;
     println!("LAB_STEP client=reconnect_delivery");
     steps.push("reconnect_delivery");
 
+    let refusal_swarm = start_swarm(0).await?;
     match tokio::time::timeout(
         REFUSAL_TIMEOUT,
-        swarm.connect(wrong_topic(args), peer, None),
+        refusal_swarm.connect(wrong_topic(args), peer, None),
     )
     .await
     {
@@ -185,12 +185,8 @@ async fn receive_expected(swarm: &Hyperswarm, topic: Topic, expected: &[u8]) -> 
     Ok(())
 }
 
-async fn send_payload(
-    swarm: &Hyperswarm,
-    topic: Topic,
-    peer: PeerAddress,
-    payload: &[u8],
-) -> Result<(), String> {
+async fn send_payload(topic: Topic, peer: PeerAddress, payload: &[u8]) -> Result<(), String> {
+    let swarm = start_swarm(0).await?;
     let mut connection = tokio::time::timeout(ACCEPT_TIMEOUT, swarm.connect(topic, peer, None))
         .await
         .map_err(|_| "timed out establishing the managed connection".to_string())?
